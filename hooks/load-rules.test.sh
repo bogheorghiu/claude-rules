@@ -1,0 +1,221 @@
+#!/bin/bash
+# Tests for load-rules.sh, run against a local fixture repo served over file://.
+#
+# What they do NOT prove: that the live harness injects SessionStart stdout into
+# context, or that github.com is reachable from a given cloud environment.
+
+set -u
+
+HOOK="$(cd "$(dirname "$0")" && pwd)/load-rules.sh"
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Pin ambient git config so a developer's settings can't change results.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+
+pass=0
+fail=0
+check() {
+    if [ "$2" = "1" ]; then echo "  ok   - $1"; pass=$((pass + 1))
+    else echo "  FAIL - $1"; fail=$((fail + 1)); fi
+}
+has() { case "$1" in *"$2"*) echo 1 ;; *) echo 0 ;; esac; }
+
+# Fixture source repo: one always-on rule, one path-scoped rule, one non-rule file.
+SRC="$TMP_DIR/src"
+mkdir -p "$SRC/rules"
+printf '# Always rule\nALWAYS_BODY\n' > "$SRC/rules/always.md"
+printf -- '---\npaths:\n  - "src/**"\n---\n# Scoped rule\nSCOPED_BODY\n' > "$SRC/rules/scoped.md"
+printf 'README_BODY\n' > "$SRC/README.md"
+git -C "$SRC" init -q && git -C "$SRC" add -A && git -C "$SRC" commit -qm init
+
+# Args: HOME dir, repo url, update mode. Mode defaults to auto here, so the fetch and
+# cache tests below see each upstream change at once; the ask-mode section passes
+# its own value, including none, to exercise the hook's real default.
+run_hook() {
+    env -i HOME="$1" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        CLAUDE_PLUGIN_DATA="$1/data" CLAUDE_PLUGIN_OPTION_RULES_REPO="$2" \
+        CLAUDE_PLUGIN_OPTION_UPDATE_MODE="${3-auto}" bash "$HOOK" </dev/null
+}
+
+echo "Testing load-rules.sh"
+echo "====================="
+
+# --- First run: clones and prints ---
+H1="$TMP_DIR/h1"; mkdir -p "$H1"
+out=$(run_hook "$H1" "file://$SRC"); rc=$?
+check "first run exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "always-on rule printed in full" "$(has "$out" ALWAYS_BODY)"
+check "path-scoped rule body NOT printed" "$([ "$(has "$out" SCOPED_BODY)" = 0 ] && echo 1 || echo 0)"
+check "path-scoped rule listed with its paths" "$(has "$out" 'src/**')"
+check "path-scoped rule listed with its file location" "$(has "$out" "$H1/data/claude-rules/rules/scoped.md")"
+check "non-rule README not printed" "$([ "$(has "$out" README_BODY)" = 0 ] && echo 1 || echo 0)"
+
+# --- A rule added upstream reaches the next session (one-file drop) ---
+printf '# New rule\nNEW_BODY\n' > "$SRC/rules/new.md"
+git -C "$SRC" add -A && git -C "$SRC" commit -qm add
+out=$(run_hook "$H1" "file://$SRC")
+check "rule dropped upstream appears after pull" "$(has "$out" NEW_BODY)"
+
+# --- Source unreachable, cache present: falls back to cache ---
+# Move the source away: the cache pulls from its own recorded origin, not the URL.
+mv "$SRC" "$SRC.gone"
+out=$(run_hook "$H1" "file://$SRC"); rc=$?
+mv "$SRC.gone" "$SRC"
+check "unreachable source with cache exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "unreachable source with cache still prints cached rules" "$(has "$out" ALWAYS_BODY)"
+check "unreachable source with cache says copies may be stale" "$(has "$out" 'may be out of date')"
+
+# --- Upstream history rewritten (force-push): cache follows it, no freeze ---
+branch=$(git -C "$SRC" symbolic-ref --short HEAD)
+git -C "$SRC" checkout -q --orphan rewritten
+printf '# Rewritten\nREWRITTEN_BODY\n' > "$SRC/rules/always.md"
+git -C "$SRC" add -A && git -C "$SRC" commit -qm rewritten
+git -C "$SRC" branch -q -M rewritten "$branch"
+out=$(run_hook "$H1" "file://$SRC")
+check "force-pushed upstream content reaches the cache" "$(has "$out" REWRITTEN_BODY)"
+check "force-pushed upstream: no stale notice" "$([ "$(has "$out" 'may be out of date')" = 0 ] && echo 1 || echo 0)"
+
+# --- Configured URL changes: the cache is re-cloned from the new source ---
+SRC2="$TMP_DIR/src2"; mkdir -p "$SRC2/rules"
+printf '# Other\nOTHER_BODY\n' > "$SRC2/rules/other.md"
+git -C "$SRC2" init -q && git -C "$SRC2" add -A && git -C "$SRC2" commit -qm init
+out=$(run_hook "$H1" "file://$SRC2")
+check "changed repo URL: new source's rules printed" "$(has "$out" OTHER_BODY)"
+check "changed repo URL: old source's rules gone" "$([ "$(has "$out" REWRITTEN_BODY)" = 0 ] && echo 1 || echo 0)"
+
+# --- CRLF frontmatter is still recognised as path-scoped ---
+printf -- '---\r\npaths:\r\n  - "x/**"\r\n---\r\nCRLF_BODY\r\n' > "$SRC2/rules/crlf.md"
+git -C "$SRC2" add -A && git -C "$SRC2" commit -qm crlf
+out=$(run_hook "$H1" "file://$SRC2")
+check "CRLF path-scoped rule body NOT printed" "$([ "$(has "$out" CRLF_BODY)" = 0 ] && echo 1 || echo 0)"
+
+# --- Rules grouped in subfolders are loaded, alongside top-level ones ---
+mkdir -p "$SRC2/rules/group"
+printf '# Nested\nNESTED_BODY\n' > "$SRC2/rules/group/nested.md"
+git -C "$SRC2" add -A && git -C "$SRC2" commit -qm nested
+out=$(run_hook "$H1" "file://$SRC2")
+check "rule in a subfolder of rules/ printed" "$(has "$out" NESTED_BODY)"
+check "subfolder rule named by its path under rules/" "$(has "$out" '=== rule: group/nested.md ===')"
+check "top-level rule still printed next to subfolder rules" "$(has "$out" OTHER_BODY)"
+
+# --- Fetch succeeds but the repo has no rules: say that, not "could not fetch" ---
+SRC3="$TMP_DIR/src3"; mkdir -p "$SRC3"
+printf 'no rules here\n' > "$SRC3/README.md"
+git -C "$SRC3" init -q && git -C "$SRC3" add -A && git -C "$SRC3" commit -qm init
+H5="$TMP_DIR/h5"; mkdir -p "$H5"
+out=$(run_hook "$H5" "file://$SRC3"); rc=$?
+check "fetched repo without rules exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "fetched repo without rules says it was fetched" "$(has "$out" 'was fetched but has no .md files')"
+check "fetched repo without rules does not blame the fetch" "$([ "$(has "$out" 'could not fetch')" = 0 ] && echo 1 || echo 0)"
+
+# --- Ask mode (the default): changes wait for approval of the exact version shown ---
+SRC4="$TMP_DIR/src4"; mkdir -p "$SRC4/rules"
+printf '# Base\nBASE_BODY\n' > "$SRC4/rules/base.md"
+git -C "$SRC4" init -q && git -C "$SRC4" add -A && git -C "$SRC4" commit -qm init
+H6="$TMP_DIR/h6"; mkdir -p "$H6"
+out=$(run_hook "$H6" "file://$SRC4" "")
+check "ask (unset mode): first clone loads its rules" "$(has "$out" BASE_BODY)"
+printf '# Added\nADDED_BODY\n' > "$SRC4/rules/added.md"
+git -C "$SRC4" add -A && git -C "$SRC4" commit -qm added
+want=$(git -C "$SRC4" rev-parse HEAD)
+out=$(run_hook "$H6" "file://$SRC4" "")
+check "ask: new upstream rule not loaded before approval" "$([ "$(has "$out" ADDED_BODY)" = 0 ] && echo 1 || echo 0)"
+check "ask: approved rules still load" "$(has "$out" BASE_BODY)"
+check "ask: notice names the pending version" "$(has "$out" "newer version $want")"
+check "ask: notice lists the changed rule file" "$(has "$out" 'rules/added.md')"
+approve=$(printf '%s\n' "$out" | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
+check "ask: notice carries an approve command for that version" "$(has "$approve" "approve $want")"
+env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    bash -c "$approve" >/dev/null 2>&1; rc=$?
+check "ask: the printed approve command succeeds as printed" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+out=$(run_hook "$H6" "file://$SRC4" "")
+check "ask: after approval the new rule loads" "$(has "$out" ADDED_BODY)"
+check "ask: after approval no pending notice" "$([ "$(has "$out" 'awaiting the user')" = 0 ] && echo 1 || echo 0)"
+printf 'docs only\n' > "$SRC4/README.md"
+git -C "$SRC4" add -A && git -C "$SRC4" commit -qm readme
+out=$(run_hook "$H6" "file://$SRC4" "")
+check "ask: a change outside rules/ asks nothing" "$([ "$(has "$out" 'awaiting the user')" = 0 ] && echo 1 || echo 0)"
+check "ask: a change outside rules/ advances the cache" "$([ "$(git -C "$H6/data/claude-rules" rev-parse HEAD)" = "$(git -C "$SRC4" rev-parse HEAD)" ] && echo 1 || echo 0)"
+env -i HOME="$H6" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve 0000000000000000000000000000000000000000 >/dev/null 2>&1; rc=$?
+check "ask: approving an unknown version fails" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
+env -i HOME="$H6" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve FETCH_HEAD >/dev/null 2>&1; rc=$?
+check "ask: approve refuses a moving name like FETCH_HEAD" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
+printf 'x' > "$SRC4/rules/diagram.png"
+git -C "$SRC4" add -A && git -C "$SRC4" commit -qm image
+out=$(run_hook "$H6" "file://$SRC4" "")
+check "ask: a non-.md file under rules/ asks nothing" "$([ "$(has "$out" 'awaiting the user')" = 0 ] && echo 1 || echo 0)"
+printf '# Later\nLATER_BODY\n' > "$SRC4/rules/later.md"
+git -C "$SRC4" add -A && git -C "$SRC4" commit -qm later
+out=$(run_hook "$H6" "file://$SRC4" "sometimes")
+check "unrecognised mode behaves as ask" "$([ "$(has "$out" LATER_BODY)" = 0 ] && [ "$(has "$out" 'awaiting the user')" = 1 ] && echo 1 || echo 0)"
+
+# --- Without CLAUDE_PLUGIN_DATA (cache under ~/.cache), the printed approve command still works ---
+SRC5="$TMP_DIR/src5"; mkdir -p "$SRC5/rules"
+printf '# One\nONE_BODY\n' > "$SRC5/rules/one.md"
+git -C "$SRC5" init -q && git -C "$SRC5" add -A && git -C "$SRC5" commit -qm init
+H7="$TMP_DIR/h7"; mkdir -p "$H7"
+nodata() { env -i HOME="$H7" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    CLAUDE_PLUGIN_OPTION_RULES_REPO="file://$SRC5" bash "$HOOK" </dev/null; }
+nodata >/dev/null
+printf '# Two\nTWO_BODY\n' > "$SRC5/rules/two.md"
+git -C "$SRC5" add -A && git -C "$SRC5" commit -qm two
+out=$(nodata)
+approve=$(printf '%s\n' "$out" | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
+env -i HOME="$H7" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1; rc=$?
+check "no plugin data dir: printed approve command works" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "no plugin data dir: approved rule then loads" "$(has "$(nodata)" TWO_BODY)"
+
+# --- A data path containing a quote still yields a working approve command ---
+H8="$TMP_DIR/h8"; D8="$TMP_DIR/d a'ta"; mkdir -p "$H8"
+quoted() { env -i HOME="$H8" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    CLAUDE_PLUGIN_DATA="$D8" CLAUDE_PLUGIN_OPTION_RULES_REPO="file://$SRC5" bash "$HOOK" </dev/null; }
+quoted >/dev/null
+printf '# Three\nTHREE_BODY\n' > "$SRC5/rules/three.md"
+git -C "$SRC5" add -A && git -C "$SRC5" commit -qm three
+approve=$(quoted | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
+env -i HOME="$H8" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1; rc=$?
+check "data path with a quote: printed approve command works" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+
+# --- Source unreachable, no cache: one-line notice, exit 0 ---
+H2="$TMP_DIR/h2"; mkdir -p "$H2"
+out=$(run_hook "$H2" "file://$TMP_DIR/missing"); rc=$?
+check "offline with no cache exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "offline with no cache says nothing was loaded" "$(has "$out" 'No shared rules loaded')"
+check "failed clone leaves no half-made cache" "$([ ! -e "$H2/data/claude-rules" ] && echo 1 || echo 0)"
+
+# --- Local install of the same repo present: silent, to avoid loading every rule twice ---
+H3="$TMP_DIR/h3"; mkdir -p "$H3/.claude/rules"
+git clone -q "file://$SRC" "$H3/.claude/rules/shared"
+out=$(run_hook "$H3" "file://$SRC"); rc=$?
+check "local install of the same repo: exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "local install of the same repo: prints nothing" "$([ -z "$out" ] && echo 1 || echo 0)"
+out=$(run_hook "$H3" "file://$SRC2")
+check "local install of a different repo: configured repo still loads" "$(has "$out" OTHER_BODY)"
+
+H4="$TMP_DIR/h4"; mkdir -p "$H4/.claude/rules"
+git -C "$H3/.claude/rules/shared" worktree add -q --detach "$H4/.claude/rules/shared"
+out=$(run_hook "$H4" "file://$SRC")
+check "local install as a worktree (.git file): prints nothing" "$([ -z "$out" ] && echo 1 || echo 0)"
+
+# --- No repo configured: the rules bundled in the plugin load, with no network ---
+PLUG="$TMP_DIR/plug"; mkdir -p "$PLUG/hooks" "$PLUG/rules"
+cp "$HOOK" "$PLUG/hooks/"
+printf '# Bundled\nBUNDLED_BODY\n' > "$PLUG/rules/bundled.md"
+H9="$TMP_DIR/h9"; mkdir -p "$H9"
+bundled() { env -i HOME="$1" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    CLAUDE_PLUGIN_DATA="$1/data" bash "$PLUG/hooks/load-rules.sh" </dev/null; }
+out=$(bundled "$H9"); rc=$?
+check "bundled: exits 0" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "bundled: plugin's own rules load" "$(has "$out" BUNDLED_BODY)"
+check "bundled: source names the plugin" "$(has "$out" 'rules bundled with this plugin')"
+check "bundled: nothing fetched or cached" "$([ ! -e "$H9/data/claude-rules" ] && echo 1 || echo 0)"
+H10="$TMP_DIR/h10"; mkdir -p "$H10/.claude/rules"
+git clone -q "file://$SRC" "$H10/.claude/rules/shared"
+git -C "$H10/.claude/rules/shared" remote set-url origin https://github.com/bogheorghiu/claude-rules
+check "bundled + local install of this repo: prints nothing" "$([ -z "$(bundled "$H10")" ] && echo 1 || echo 0)"
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]
