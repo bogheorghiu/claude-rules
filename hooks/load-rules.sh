@@ -8,7 +8,7 @@
 # to hooks as CLAUDE_PLUGIN_OPTION_<KEY>.
 REPO_URL="${CLAUDE_PLUGIN_OPTION_RULES_REPO:-}"
 # Anything but "auto" means ask: an unrecognised value must fail toward consent.
-MODE=ask; [ "${CLAUDE_PLUGIN_OPTION_UPDATE_MODE:-}" = auto ] && MODE=auto
+MODE=ask; [ "$(printf '%s' "${CLAUDE_PLUGIN_OPTION_UPDATE_MODE:-}" | tr '[:upper:]' '[:lower:]')" = auto ] && MODE=auto
 CACHE="${CLAUDE_PLUGIN_DATA:-$HOME/.cache/shared-rules}/claude-rules"
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -102,14 +102,18 @@ render() {
     # globstar: macOS ships bash 3.2, where ** silently means * and top-level rules vanish.
     files=()
     while IFS= read -r f; do files+=("$f"); done < <(find "$RULES_DIR" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
-    if [ ${#files[@]} -eq 0 ]; then
+    # With a pending update the notice below still has to print, even when the approved
+    # version has no rules yet; otherwise that update could never be approved.
+    if [ ${#files[@]} -eq 0 ] && [ -z "$pending" ]; then
         # Silence would read the same as "there are no rules"; say which it is.
         if [ -z "$REPO_URL" ]; then
             echo "[shared-rules] No shared rules loaded this session: this plugin version ships no rules."
-        elif [ -d "$CACHE/.git" ]; then
-            echo "[shared-rules] No shared rules loaded this session: $REPO_URL was fetched but has no .md files under rules/."
-        else
+        elif [ ! -d "$CACHE/.git" ]; then
             echo "[shared-rules] No shared rules loaded this session: could not fetch $REPO_URL and nothing is cached."
+        elif [ -n "$stale" ]; then
+            echo "[shared-rules] No shared rules loaded this session: could not refresh $REPO_URL, and the cached copy has no .md files under rules/."
+        else
+            echo "[shared-rules] No shared rules loaded this session: $REPO_URL was fetched but has no .md files under rules/."
         fi
         exit 0
     fi

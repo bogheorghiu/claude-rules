@@ -296,6 +296,29 @@ done
 H16="$TMP_DIR/h16"; mkdir -p "$H16/data/claude-rules/junk"
 check "leftover cache folder without .git: rules still load" "$(has "$(run_hook "$H16" "file://$SRC6")" '# Filler')"
 
+# --- Ask mode from an approved version with no rules: the pending update still shows ---
+SRC7="$TMP_DIR/src7"; mkdir -p "$SRC7"
+printf 'readme only\n' > "$SRC7/README.md"
+git -C "$SRC7" init -q && git -C "$SRC7" add -A && git -C "$SRC7" commit -qm init
+H17="$TMP_DIR/h17"; mkdir -p "$H17"
+run_hook "$H17" "file://$SRC7" "" >/dev/null
+mkdir -p "$SRC7/rules"; printf '# First\nFIRST_BODY\n' > "$SRC7/rules/first.md"
+git -C "$SRC7" add -A && git -C "$SRC7" commit -qm first
+o=$(run_hook "$H17" "file://$SRC7" "")
+check "ask from an empty approved version: pending update is shown" "$(has "$o" 'awaiting the user')"
+check "ask from an empty approved version: no 'has no .md files' claim" "$([ "$(has "$o" 'has no .md files')" = 0 ] && echo 1 || echo 0)"
+
+# --- Unreachable source, cached copy without rules: blame the refresh, not the repo ---
+mv "$SRC3" "$SRC3.gone"
+o=$(run_hook "$H5" "file://$SRC3")
+mv "$SRC3.gone" "$SRC3"
+check "unreachable source, empty cache: says the refresh failed" "$(has "$o" 'could not refresh')"
+
+# --- Mode is case-insensitive ---
+printf '# Second\nSECOND_BODY\n' > "$SRC7/rules/second.md"
+git -C "$SRC7" add -A && git -C "$SRC7" commit -qm second
+check "update mode 'Auto' counts as auto" "$(has "$(run_hook "$H17" "file://$SRC7" "Auto")" SECOND_BODY)"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
