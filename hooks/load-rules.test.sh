@@ -246,11 +246,15 @@ check "slicing: six parallel slices still carry every rule exactly once" "$ok"
 # Fewer hooks than slices: the last hook names the rules left out and where to read them.
 o=$(part "$H11" sessA 2 2)
 check "overflow: last hook says more rules did not fit" "$(has "$o" 'did not fit')"
-check "overflow: says where to resume reading" "$(has "$o" 'from the line that starts')"
+check "overflow: says where to resume reading" "$(has "$o" 'from line')"
+ln=$(printf '%s' "$o" | sed -n 's/.* from line \([0-9]*\) to the end.*/\1/p')
+first_left=$(sed -n "${ln}p" "$H11/data/render-sessA.txt")
+check "overflow: that line is where the first left-out slice begins" "$([ "$(has "$all" "$first_left")" = 0 ] || [ "$(has "$(part "$H11" sessA 1 2)$(part "$H11" sessA 2 2)" "$first_left")" = 0 ] && echo 1 || echo 0)"
 check "overflow: points at the full render" "$(has "$o" "$H11/data/render-sessA.txt")"
 
 # One render per session: a source change mid-start doesn't split versions across slices.
 SRC6="$TMP_DIR/src6"; mkdir -p "$SRC6/rules"
+{ echo '# Filler'; head -c 8950 /dev/zero | tr '\0' 'f'; echo; } > "$SRC6/rules/a-filler.md"
 printf '# S6\nS6_BODY\n' > "$SRC6/rules/s6.md"
 git -C "$SRC6" init -q && git -C "$SRC6" add -A && git -C "$SRC6" commit -qm init
 H13="$TMP_DIR/h13"; mkdir -p "$H13"
@@ -260,10 +264,10 @@ fpart() { printf '{"session_id":"%s"}' "$2" | env -i HOME="$H13" PATH="$PATH" GI
 fpart 1 sessC >/dev/null
 printf '# S6b\nS6B_BODY\n' > "$SRC6/rules/s6b.md"
 git -C "$SRC6" add -A && git -C "$SRC6" commit -qm more
-fpart 2 sessC >/dev/null
-check "one render per start: a later slice reuses slice 1's render" "$([ "$(has "$(cat "$H13/data/render-sessC.txt")" S6B_BODY)" = 0 ] && echo 1 || echo 0)"
-check "a later start of the same session (compact, resume) renders afresh" "$(has "$(fpart 1 sessC)" S6B_BODY)"
-check "a new session renders afresh" "$(has "$(fpart 1 sessD)" S6B_BODY)"
+o2=$(fpart 2 sessC)
+check "one render per start: slice 2 prints from slice 1's version" "$([ "$(has "$o2" S6_BODY)" = 1 ] && [ "$(has "$o2" S6B_BODY)" = 0 ] && echo 1 || echo 0)"
+check "a later start of the same session (compact, resume) renders afresh" "$(has "$(fpart 1 sessC)$(fpart 2 sessC)" S6B_BODY)"
+check "a new session renders afresh" "$(has "$(fpart 1 sessD)$(fpart 2 sessD)" S6B_BODY)"
 
 # --- Hostile sizes: many rules, one huge line ---
 MANY="$TMP_DIR/many"; mkdir -p "$MANY/hooks" "$MANY/rules"; cp "$HOOK" "$MANY/hooks/"
@@ -283,14 +287,14 @@ check "a 25,000-character line: every slice under 10,000 characters (max $maxlen
 check "a 25,000-character line: all of it delivered across slices" "$([ $total -eq 25000 ] && echo 1 || echo 0)"
 
 # --- Local install of the same repo under another spelling of its URL ---
-for variant in "https://github.com/bogheorghiu/claude-rules.git" "https://github.com/bogheorghiu/claude-rules/" "git@github.com:bogheorghiu/claude-rules.git"; do
+for variant in "https://github.com/bogheorghiu/claude-rules.git" "https://github.com/bogheorghiu/claude-rules/" "git@github.com:bogheorghiu/claude-rules.git" "ssh://git@github.com/bogheorghiu/claude-rules.git" "https://github.com/BogHeorghiu/Claude-Rules"; do
     git -C "$H10/.claude/rules/shared" remote set-url origin "$variant"
     check "bundled + local install as $variant: prints nothing" "$([ -z "$(bundled "$H10")" ] && echo 1 || echo 0)"
 done
 
 # --- A cache folder left without .git doesn't swallow later clones ---
 H16="$TMP_DIR/h16"; mkdir -p "$H16/data/claude-rules/junk"
-check "leftover cache folder without .git: rules still load" "$(has "$(run_hook "$H16" "file://$SRC6")" S6_BODY)"
+check "leftover cache folder without .git: rules still load" "$(has "$(run_hook "$H16" "file://$SRC6")" '# Filler')"
 
 echo
 echo "$pass passed, $fail failed"

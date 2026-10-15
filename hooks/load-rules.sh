@@ -30,7 +30,12 @@ fi
 # natively; printing them again would put every rule in context twice. (-e, not -d:
 # a submodule or worktree checkout has a .git *file*.) Bundled rules are this repo's.
 # URLs compare after normalising the spellings of one repo: .git, a trailing /, SSH.
-norm() { local u="${1%/}"; u="${u%.git}"; case "$u" in git@*:*) u="${u#git@}"; u="https://${u/://}" ;; esac; echo "$u"; }
+norm() {
+    local u="${1%/}"; u="${u%.git}"
+    case "$u" in git@*:*) u="${u#git@}"; u="${u/://}" ;; esac
+    u="${u#*://}"; u="${u#*@}"           # scheme and user: https, http, ssh, git@
+    printf '%s\n' "$u" | tr '[:upper:]' '[:lower:]'   # GitHub ignores case
+}
 LOCAL="$HOME/.claude/rules/shared"
 if [ -e "$LOCAL/.git" ] && [ "$(norm "$(git -C "$LOCAL" remote get-url origin 2>/dev/null)")" = \
      "$(norm "${REPO_URL:-https://github.com/bogheorghiu/claude-rules}")" ]; then
@@ -57,7 +62,7 @@ render() {
     else
         RULES_DIR="$CACHE/rules"
         # A cache cloned from a different URL (the rules_repo setting changed) is not this repo.
-        if [ -d "$CACHE/.git" ] && [ "$(git -C "$CACHE" remote get-url origin 2>/dev/null)" != "$REPO_URL" ]; then
+        if [ -d "$CACHE/.git" ] && [ "$(norm "$(git -C "$CACHE" remote get-url origin 2>/dev/null)")" != "$(norm "$REPO_URL")" ]; then
             rm -rf "$CACHE"
         fi
 
@@ -164,44 +169,53 @@ LIMIT=9000   # under 10,000, leaving room for the wrapper lines
 OUT="${CLAUDE_PLUGIN_DATA:-$HOME/.cache/shared-rules}"
 mkdir -p "$OUT" 2>/dev/null
 started=$(date +%s)
-sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' 2>/dev/null | head -1)
+sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9_-')
 RENDER="$OUT/render-${sid:-$$}.txt"
 find "$OUT" -maxdepth 1 -name 'render-*' -mtime +1 -exec rm -f {} + 2>/dev/null
 if [ "$PART" = 1 ]; then
+    # Sessions starting together share the cache: one fetch/render at a time.
+    LOCK="$OUT/cache.lock"
+    find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
+    for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && break; sleep 0.2; done
     ( render ) > "$RENDER.tmp.$$" 2>/dev/null
+    rmdir "$LOCK" 2>/dev/null
     echo "$started" > "$RENDER.ts.tmp.$$"
     mv "$RENDER.tmp.$$" "$RENDER" && mv "$RENDER.ts.tmp.$$" "$RENDER.ts"
 else
     [ -n "$sid" ] || exit 0
-    for _ in $(seq 1 200); do
+    for _ in $(seq 1 210); do   # ~42 s, inside the 45 s hook timeout
         ts=$(cat "$RENDER.ts" 2>/dev/null)
-        [ -n "$ts" ] && [ "$ts" -ge $((started - 5)) ] && [ -s "$RENDER" ] && break
+        [ -n "$ts" ] && [ "$ts" -ge $((started - 30)) ] && [ -s "$RENDER" ] && break
         ts=""; sleep 0.2
     done
-    [ -n "$ts" ] || exit 0
+    if [ -z "$ts" ]; then
+        [ -s "$RENDER" ] || exit 0   # nothing rendered yet this session: slice 1 reports
+        echo "[shared-rules] Slice $PART could not load in time; some rules may be missing. The full text is in $RENDER."
+        exit 0
+    fi
 fi
 
 # Pack whole blocks (each starts at a "=== " line) into slices under LIMIT. A block
 # longer than LIMIT is split between lines, and a line longer than LIMIT is cut.
 awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$RENDER" '
-    function flush() { if (cur != "") { chunk[++c] = cur; cur = "" } }
-    function add(t) { if (cur != "" && length(cur) + length(t) > lim) flush(); cur = cur t }
+    function flush() { if (cur != "") { chunk[++c] = cur; from[c] = curfrom; cur = "" } }
+    function add(t, at) { if (cur != "" && length(cur) + length(t) > lim) flush(); if (cur == "") curfrom = at; cur = cur t }
     function addline(l) {
-        if (length(blk) + length(l) > lim) { add(blk); flush(); blk = "" }
+        if (length(blk) + length(l) > lim) { add(blk, blkfrom); flush(); blk = "" }
+        if (blk == "") blkfrom = NR
         blk = blk l
     }
-    /^=== / { if (blk != "") add(blk); blk = "" }
+    /^=== / { if (blk != "") add(blk, blkfrom); blk = "" }
     { line = $0 "\n"
       while (length(line) > lim) { addline(substr(line, 1, lim) "\n"); line = substr(line, lim + 1) }
       addline(line) }
     END {
-        if (blk != "") add(blk); flush()
+        if (blk != "") add(blk, blkfrom); flush()
         if (k > c) exit
         printf "<shared-rules source=\"%s\" part=\"%d of %d\">\n", src, k, (c < n ? c : n)
         printf "%s", chunk[k]
         if (c > n && k == n) {
-            split(chunk[n + 1], first, "\n")
-            printf "\n=== more rules ===\nThe rest (%d more slice(s)) did not fit in this session'"'"'s hooks. Before other work, read %s from the line that starts:\n    %s\n", c - n, file, substr(first[1], 1, 200)
+            printf "\n=== more rules ===\nThe rest did not fit in this session'"'"'s hooks. Before other work, read %s from line %d to the end.\n", file, from[n + 1]
         }
         print "</shared-rules>"
     }' "$RENDER"
