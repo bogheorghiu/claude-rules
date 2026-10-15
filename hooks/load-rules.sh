@@ -44,107 +44,153 @@ git_net() {
     "${t[@]}" git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 "$@" >/dev/null 2>&1
 }
 
-stale=""
-pending=""
-if [ -z "$REPO_URL" ]; then
-    # No repo configured: load the rules shipped inside this plugin version, so the
-    # default set only ever changes through a plugin release. No network.
-    RULES_DIR="$ROOT/rules"
-    SOURCE="rules bundled with this plugin"
-else
-    RULES_DIR="$CACHE/rules"
-    SOURCE="$REPO_URL"
-    # A cache cloned from a different URL (the rules_repo setting changed) is not this repo.
-    if [ -d "$CACHE/.git" ] && [ "$(git -C "$CACHE" remote get-url origin 2>/dev/null)" != "$REPO_URL" ]; then
-        rm -rf "$CACHE"
-    fi
-
-    if [ -d "$CACHE/.git" ]; then
-        # fetch + reset rather than pull: a force-pushed upstream would make
-        # `pull --ff-only` fail on every session and freeze the cache for good.
-        # The cache's checkout is the approved version; in ask mode a newer fetch waits.
-        if ! git_net -C "$CACHE" fetch --depth 1 -q origin HEAD; then
-            stale=1
-        elif [ "$(git -C "$CACHE" rev-parse FETCH_HEAD)" != "$(git -C "$CACHE" rev-parse HEAD)" ]; then
-            # Nothing to ask about when no loaded rule changed (a README edit, say). A
-            # failed diff must not read as "no change": ask mode fails toward consent.
-            if ! changed=$(git -C "$CACHE" diff --name-only HEAD FETCH_HEAD -- 'rules/*.md' 2>/dev/null); then
-                stale=1
-            elif [ "$MODE" = auto ] || [ -z "$changed" ]; then
-                git -C "$CACHE" reset -q --hard FETCH_HEAD >/dev/null 2>&1 || stale=1
-            else
-                pending=$(git -C "$CACHE" rev-parse FETCH_HEAD)
-            fi
-        fi
-    else
-        # A first clone is loaded in either mode: installing the plugin is consent to
-        # the rules it points at today; ask mode governs what changes after that.
-        # Clone beside the cache and move it in only when complete, so a clone killed
-        # mid-way can never leave a half-made .git that every later session trips on.
-        mkdir -p "$(dirname "$CACHE")" 2>/dev/null
-        tmp="$CACHE.tmp.$$"
-        if git_net clone --depth 1 -q "$REPO_URL" "$tmp"; then
-            mv "$tmp" "$CACHE"
-        fi
-        rm -rf "$tmp"
-    fi
-fi
-
-# Rules may sit in subfolders of rules/, as Claude Code allows locally. `find`, not
-# globstar: macOS ships bash 3.2, where ** silently means * and top-level rules vanish.
-files=()
-while IFS= read -r f; do files+=("$f"); done < <(find "$RULES_DIR" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
-if [ ${#files[@]} -eq 0 ]; then
-    # Silence would read the same as "there are no rules"; say which it is.
+SOURCE_LABEL="${REPO_URL:-rules bundled with this plugin}"
+render() {
+    stale=""
+    pending=""
     if [ -z "$REPO_URL" ]; then
-        echo "[shared-rules] No shared rules loaded this session: this plugin version ships no rules."
-    elif [ -d "$CACHE/.git" ]; then
-        echo "[shared-rules] No shared rules loaded this session: $REPO_URL was fetched but has no .md files under rules/."
+        # No repo configured: load the rules shipped inside this plugin version, so the
+        # default set only ever changes through a plugin release. No network.
+        RULES_DIR="$ROOT/rules"
     else
-        echo "[shared-rules] No shared rules loaded this session: could not fetch $REPO_URL and nothing is cached."
-    fi
-    exit 0
-fi
+        RULES_DIR="$CACHE/rules"
+        # A cache cloned from a different URL (the rules_repo setting changed) is not this repo.
+        if [ -d "$CACHE/.git" ] && [ "$(git -C "$CACHE" remote get-url origin 2>/dev/null)" != "$REPO_URL" ]; then
+            rm -rf "$CACHE"
+        fi
 
-# The \r strip matters: a rule committed from Windows has CRLF endings, its
-# '---\r' would never match the delimiter, and a path-scoped rule would load in full.
-frontmatter() {
-    awk '{sub(/\r$/, "")} NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 {print}' "$1"
+        if [ -d "$CACHE/.git" ]; then
+            # fetch + reset rather than pull: a force-pushed upstream would make
+            # `pull --ff-only` fail on every session and freeze the cache for good.
+            # The cache's checkout is the approved version; in ask mode a newer fetch waits.
+            if ! git_net -C "$CACHE" fetch --depth 1 -q origin HEAD; then
+                stale=1
+            elif [ "$(git -C "$CACHE" rev-parse FETCH_HEAD)" != "$(git -C "$CACHE" rev-parse HEAD)" ]; then
+                # Nothing to ask about when no loaded rule changed (a README edit, say). A
+                # failed diff must not read as "no change": ask mode fails toward consent.
+                if ! changed=$(git -C "$CACHE" diff --name-only HEAD FETCH_HEAD -- 'rules/*.md' 2>/dev/null); then
+                    stale=1
+                elif [ "$MODE" = auto ] || [ -z "$changed" ]; then
+                    git -C "$CACHE" reset -q --hard FETCH_HEAD >/dev/null 2>&1 || stale=1
+                else
+                    pending=$(git -C "$CACHE" rev-parse FETCH_HEAD)
+                fi
+            fi
+        else
+            # A first clone is loaded in either mode: installing the plugin is consent to
+            # the rules it points at today; ask mode governs what changes after that.
+            # Clone beside the cache and move it in only when complete, so a clone killed
+            # mid-way can never leave a half-made .git that every later session trips on.
+            mkdir -p "$(dirname "$CACHE")" 2>/dev/null
+            tmp="$CACHE.tmp.$$"
+            if git_net clone --depth 1 -q "$REPO_URL" "$tmp"; then
+                mv "$tmp" "$CACHE"
+            fi
+            rm -rf "$tmp"
+        fi
+    fi
+
+    # Rules may sit in subfolders of rules/, as Claude Code allows locally. `find`, not
+    # globstar: macOS ships bash 3.2, where ** silently means * and top-level rules vanish.
+    files=()
+    while IFS= read -r f; do files+=("$f"); done < <(find "$RULES_DIR" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
+    if [ ${#files[@]} -eq 0 ]; then
+        # Silence would read the same as "there are no rules"; say which it is.
+        if [ -z "$REPO_URL" ]; then
+            echo "[shared-rules] No shared rules loaded this session: this plugin version ships no rules."
+        elif [ -d "$CACHE/.git" ]; then
+            echo "[shared-rules] No shared rules loaded this session: $REPO_URL was fetched but has no .md files under rules/."
+        else
+            echo "[shared-rules] No shared rules loaded this session: could not fetch $REPO_URL and nothing is cached."
+        fi
+        exit 0
+    fi
+
+    # The \r strip matters: a rule committed from Windows has CRLF endings, its
+    # '---\r' would never match the delimiter, and a path-scoped rule would load in full.
+    frontmatter() {
+        awk '{sub(/\r$/, "")} NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 {print}' "$1"
+    }
+
+    scoped=()
+    [ -n "$stale" ] && echo "Could not refresh from the source this session; these are the last cached copies and may be out of date."
+    if [ -n "$pending" ]; then
+        echo
+        echo "=== rule updates awaiting the user's approval ==="
+        echo "Update mode is 'ask'. The rules below are the approved version $(git -C "$CACHE" rev-parse --short HEAD)."
+        echo "The source has a newer version $pending changing:"
+        git -C "$CACHE" diff --name-status HEAD "$pending" -- 'rules/*.md' | sed 's/^/    /'
+        echo "Tell the user about this pending update before other work. To show them the changes:"
+        echo "    git -C $(printf %q "$CACHE") diff HEAD $pending -- 'rules/*.md'"
+        echo "Only if the user explicitly approves, run:"
+        echo "    CLAUDE_PLUGIN_DATA=$(printf %q "${CLAUDE_PLUGIN_DATA:-}") bash $(printf %q "$SELF") approve $pending"
+    fi
+    for f in "${files[@]}"; do
+        if frontmatter "$f" | grep -q '^paths:'; then
+            scoped+=("$f")
+            continue
+        fi
+        echo
+        echo "=== rule: ${f#"$RULES_DIR/"} ==="
+        cat "$f"
+    done
+
+    if [ ${#scoped[@]} -gt 0 ]; then
+        echo
+        echo "=== path-scoped rules ==="
+        echo "Not loaded here. Before working on files matching a rule's paths, read that rule's file."
+        for f in "${scoped[@]}"; do
+            echo
+            echo "- $f"
+            frontmatter "$f" | sed 's/^/    /'
+        done
+    fi
 }
 
-scoped=()
-echo "<shared-rules source=\"$SOURCE\">"
-[ -n "$stale" ] && echo "Could not refresh from the source this session; these are the last cached copies and may be out of date."
-if [ -n "$pending" ]; then
-    echo
-    echo "=== rule updates awaiting the user's approval ==="
-    echo "Update mode is 'ask'. The rules below are the approved version $(git -C "$CACHE" rev-parse --short HEAD)."
-    echo "The source has a newer version $pending changing:"
-    git -C "$CACHE" diff --name-status HEAD "$pending" -- 'rules/*.md' | sed 's/^/    /'
-    echo "Tell the user about this pending update before other work. To show them the changes:"
-    echo "    git -C $(printf %q "$CACHE") diff HEAD $pending -- 'rules/*.md'"
-    echo "Only if the user explicitly approves, run:"
-    echo "    CLAUDE_PLUGIN_DATA=$(printf %q "${CLAUDE_PLUGIN_DATA:-}") bash $(printf %q "$SELF") approve $pending"
-fi
-for f in "${files[@]}"; do
-    if frontmatter "$f" | grep -q '^paths:'; then
-        scoped+=("$f")
-        continue
-    fi
-    echo
-    echo "=== rule: ${f#"$RULES_DIR/"} ==="
-    cat "$f"
-done
+# Claude Code passes a hook at most 10,000 characters of output; beyond that the model
+# sees only a 2,000-character preview. The limit is per hook, so hooks.json registers
+# several and each prints one slice: `load-rules.sh part K N`.
+PART="${2:-1}"; PARTS="${3:-1}"
+[ "${1:-}" = part ] || { PART=1; PARTS=1; }
+LIMIT=9000   # under 10,000, leaving room for the wrapper lines
 
-if [ ${#scoped[@]} -gt 0 ]; then
-    echo
-    echo "=== path-scoped rules ==="
-    echo "Not loaded here. Before working on files matching a rule's paths, read that rule's file."
-    for f in "${scoped[@]}"; do
-        echo
-        echo "- $f"
-        frontmatter "$f" | sed 's/^/    /'
-    done
+# Render once per session start, so every slice comes from the same version. The
+# session id on stdin names the render; parallel slices wait on a lock for it.
+OUT="${CLAUDE_PLUGIN_DATA:-$HOME/.cache/shared-rules}"
+mkdir -p "$OUT" 2>/dev/null
+sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' 2>/dev/null | head -1)
+RENDER="$OUT/render-${sid:-$$}.txt"
+LOCK="$OUT/render.lock"
+find "$OUT" -maxdepth 1 -name 'render-*.txt' -mtime +1 -exec rm -f {} + 2>/dev/null
+find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
+locked=""
+for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
+if [ ! -s "$RENDER" ] || [ -z "$sid" ]; then
+    ( render ) > "$RENDER.tmp.$$" 2>/dev/null
+    mv "$RENDER.tmp.$$" "$RENDER"
 fi
-echo "</shared-rules>"
+[ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
+
+# Pack whole blocks (each starts at a "=== " line) into slices under LIMIT; a block
+# longer than LIMIT on its own is split between lines.
+awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$RENDER" '
+    function flush() { if (cur != "") { chunk[++c] = cur; cur = "" } }
+    function add(t) { if (cur != "" && length(cur) + length(t) > lim) flush(); cur = cur t }
+    /^=== / { if (blk != "") add(blk); blk = "" }
+    { line = $0 "\n"
+      if (length(blk) + length(line) > lim) { add(blk); flush(); blk = "" }
+      blk = blk line }
+    END {
+        if (blk != "") add(blk); flush()
+        for (i = n + 1; i <= c; i++) {        # names of the rules that did not fit
+            m = split(chunk[i], ls, "\n")
+            for (j = 1; j <= m; j++) if (ls[j] ~ /^=== rule: /) { sub(/^=== rule: /, "", ls[j]); sub(/ ===$/, "", ls[j]); rest = rest "    " ls[j] "\n" }
+        }
+        if (k > c) exit
+        last = (c > n && k == n)
+        printf "<shared-rules source=\"%s\" part=\"%d of %d\">\n", src, k, (c < n ? c : n)
+        printf "%s", chunk[k]
+        if (last) printf "\n=== more rules ===\nThese did not fit in this session'"'"'s hooks; read them in %s before other work:\n%s", file, rest
+        print "</shared-rules>"
+    }' "$RENDER"
 exit 0

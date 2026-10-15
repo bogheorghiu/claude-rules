@@ -216,6 +216,53 @@ git clone -q "file://$SRC" "$H10/.claude/rules/shared"
 git -C "$H10/.claude/rules/shared" remote set-url origin https://github.com/bogheorghiu/claude-rules
 check "bundled + local install of this repo: prints nothing" "$([ -z "$(bundled "$H10")" ] && echo 1 || echo 0)"
 
+# --- Slicing: output over the 10,000-character hook limit is split across hooks ---
+BIG="$TMP_DIR/big"; mkdir -p "$BIG/hooks" "$BIG/rules"
+cp "$HOOK" "$BIG/hooks/"
+for i in 1 2 3 4 5 6 7 8; do
+    { printf '# Big rule %s\nBIGMARK_%s\n' "$i" "$i"; head -c 3000 /dev/zero | tr '\0' 'x'; echo; } > "$BIG/rules/big$i.md"
+done
+H11="$TMP_DIR/h11"; mkdir -p "$H11"
+part() { # args: home, session id, part, parts
+    printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$2" | \
+    env -i HOME="$1" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+        CLAUDE_PLUGIN_DATA="$1/data" bash "$BIG/hooks/load-rules.sh" part "$3" "$4"; }
+all=""; maxlen=0
+for k in 1 2 3 4 5 6; do
+    o=$(part "$H11" sessA "$k" 6); all="$all$o"
+    [ ${#o} -gt $maxlen ] && maxlen=${#o}
+done
+check "slicing: every slice under 10,000 characters (max ${maxlen})" "$([ $maxlen -le 10000 ] && echo 1 || echo 0)"
+ok=1; for i in 1 2 3 4 5 6 7 8; do [ "$(printf '%s' "$all" | grep -c "BIGMARK_$i\$")" = 1 ] || ok=0; done
+check "slicing: all slices together carry every rule exactly once" "$ok"
+check "slicing: unused slices print nothing" "$([ -z "$(part "$H11" sessA 6 6)" ] && echo 1 || echo 0)"
+
+# Parallel slices of one session render once and agree.
+H12="$TMP_DIR/h12"; mkdir -p "$H12"
+for k in 1 2 3 4 5 6; do part "$H12" sessB "$k" 6 > "$TMP_DIR/par$k.out" & done; wait
+ok=1; for i in 1 2 3 4 5 6 7 8; do [ "$(cat "$TMP_DIR"/par*.out | grep -c "BIGMARK_$i\$")" = 1 ] || ok=0; done
+check "slicing: six parallel slices still carry every rule exactly once" "$ok"
+
+# Fewer hooks than slices: the last hook names the rules left out and where to read them.
+o=$(part "$H11" sessA 2 2)
+check "overflow: last hook says more rules did not fit" "$(has "$o" 'did not fit')"
+check "overflow: names a rule left out" "$(has "$o" 'big8.md')"
+check "overflow: points at the full render" "$(has "$o" "$H11/data/render-sessA.txt")"
+
+# One render per session: a source change mid-start doesn't split versions across slices.
+SRC6="$TMP_DIR/src6"; mkdir -p "$SRC6/rules"
+printf '# S6\nS6_BODY\n' > "$SRC6/rules/s6.md"
+git -C "$SRC6" init -q && git -C "$SRC6" add -A && git -C "$SRC6" commit -qm init
+H13="$TMP_DIR/h13"; mkdir -p "$H13"
+fpart() { printf '{"session_id":"%s"}' "$2" | env -i HOME="$H13" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    CLAUDE_PLUGIN_DATA="$H13/data" CLAUDE_PLUGIN_OPTION_RULES_REPO="file://$SRC6" CLAUDE_PLUGIN_OPTION_UPDATE_MODE=auto \
+    bash "$HOOK" part "$1" 2; }
+fpart 1 sessC >/dev/null
+printf '# S6b\nS6B_BODY\n' > "$SRC6/rules/s6b.md"
+git -C "$SRC6" add -A && git -C "$SRC6" commit -qm more
+check "one render per session: a later slice reuses it" "$([ "$(has "$(fpart 1 sessC)$(fpart 2 sessC)" S6B_BODY)" = 0 ] && echo 1 || echo 0)"
+check "a new session renders afresh" "$(has "$(fpart 1 sessD)" S6B_BODY)"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
