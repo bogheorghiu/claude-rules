@@ -72,6 +72,10 @@ render() {
             # The cache's checkout is the approved version; in ask mode a newer fetch waits.
             if ! git_net -C "$CACHE" fetch --depth 1 -q origin HEAD; then
                 stale=1
+            elif ! git -C "$CACHE" rev-parse -q --verify HEAD >/dev/null; then
+                # Cloned while the repo was still empty: no approved version exists to
+                # diff against, so its first content loads as a first clone would.
+                git -C "$CACHE" reset -q --hard FETCH_HEAD >/dev/null 2>&1 || stale=1
             elif [ "$(git -C "$CACHE" rev-parse FETCH_HEAD)" != "$(git -C "$CACHE" rev-parse HEAD)" ]; then
                 # Nothing to ask about when no loaded rule changed (a README edit, say). A
                 # failed diff must not read as "no change": ask mode fails toward consent.

@@ -164,8 +164,17 @@ git -C "$SRC5" add -A && git -C "$SRC5" commit -qm two
 out=$(nodata)
 approve=$(printf '%s\n' "$out" | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
 env -i HOME="$H7" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1; rc=$?
+check "no plugin data dir: notice prints an approve command for the new version" "$(has "$approve" "approve $(git -C "$SRC5" rev-parse HEAD)")"
 check "no plugin data dir: printed approve command works" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
 check "no plugin data dir: approved rule then loads" "$(has "$(nodata)" TWO_BODY)"
+
+# --- A repo cloned while still empty loads its first rules once they are pushed ---
+SRC9="$TMP_DIR/src9"; mkdir -p "$SRC9"; git -C "$SRC9" init -q
+H19="$TMP_DIR/h19"; mkdir -p "$H19"
+run_hook "$H19" "file://$SRC9" "" >/dev/null
+mkdir -p "$SRC9/rules"; printf '# Early\nEARLY_BODY\n' > "$SRC9/rules/early.md"
+git -C "$SRC9" add -A && git -C "$SRC9" commit -qm early
+check "repo empty at first clone: its first rules load once pushed" "$(has "$(run_hook "$H19" "file://$SRC9" "")" EARLY_BODY)"
 
 # --- A data path containing a quote still yields a working approve command ---
 H8="$TMP_DIR/h8"; D8="$TMP_DIR/d a'ta"; mkdir -p "$H8"
