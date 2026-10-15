@@ -30,18 +30,22 @@ out of step with it.
 ### 1. Local machines (Claude Code CLI / IDE)
 
 Claude Code loads every `.md` file under `~/.claude/rules/` in every session. A plain
-clone would also load this README as a rule. So clone just the `rules/` folder, using
-a sparse checkout:
+clone would also load this README as a rule. So clone just the `rules/` folder, plus
+the small update script (not a `.md` file, so never loaded as a rule), using a sparse
+checkout:
 
 ```bash
 git clone --filter=blob:none --no-checkout https://github.com/bogheorghiu/claude-rules ~/.claude/rules/shared
-git -C ~/.claude/rules/shared sparse-checkout set --no-cone '/rules/'
+git -C ~/.claude/rules/shared sparse-checkout set --no-cone '/rules/' '/hooks/local-update.sh'
 git -C ~/.claude/rules/shared checkout
 ```
 
-Then add a SessionStart hook to `~/.claude/settings.json` that pulls updates. It runs
-detached, so it never blocks a session and never fails one when you're offline. A pull
-that fails just leaves the last good copy in place:
+Then add a SessionStart hook to `~/.claude/settings.json` that checks for updates.
+Choose the mode at the end of the command:
+
+- `ask` (recommended): new or changed rules wait for your approval. Claude tells you
+  what changed at the start of a session and applies the update only if you say yes.
+- `auto`: they're applied as soon as they're published.
 
 ```json
 {
@@ -51,7 +55,8 @@ that fails just leaves the last good copy in place:
         "hooks": [
           {
             "type": "command",
-            "command": "(git -C \"$HOME/.claude/rules/shared\" pull --ff-only -q >/dev/null 2>&1 &) ; exit 0"
+            "command": "bash \"$HOME/.claude/rules/shared/hooks/local-update.sh\" ask",
+            "timeout": 30
           }
         ]
       }
@@ -60,9 +65,14 @@ that fails just leaves the last good copy in place:
 }
 ```
 
-A pulled update takes effect from the next session. Claude Code reads rules when a
-session starts, and the docs don't say whether that happens before or after
-SessionStart hooks run.
+The script never blocks or fails a session: offline, it does nothing and the last copy
+stays in place. An approved or automatic update takes effect from the next session,
+because Claude Code reads rules when a session starts, and the docs don't say whether
+that happens before or after SessionStart hooks run.
+
+**Installed before the update script existed?** Add it to your checkout once:
+`git -C ~/.claude/rules/shared sparse-checkout add '/hooks/local-update.sh'`, then
+`git -C ~/.claude/rules/shared pull`.
 
 **Check it worked:** run `/memory` in a new session and confirm the files from
 `rules/` are listed. The Claude Code docs say subfolders are scanned for *project*
