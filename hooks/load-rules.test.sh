@@ -142,6 +142,13 @@ env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/de
 check "ask: approving an unknown version fails" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
 env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve FETCH_HEAD >/dev/null 2>&1; rc=$?
 check "ask: approve refuses a moving name like FETCH_HEAD" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
+# An approval waits for a session start that holds the cache, rather than racing it.
+mkdir "$H6/data/cache.lock"; ( sleep 2; rmdir "$H6/data/cache.lock" ) &
+t0=$(date +%s%N)
+env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve "$(git -C "$H6/data/claude-rules" rev-parse HEAD)" >/dev/null 2>&1; rc=$?
+ms=$(( ($(date +%s%N) - t0) / 1000000 )); wait
+check "approve waits for a held cache lock, then succeeds" "$([ $rc -eq 0 ] && [ $ms -ge 1500 ] && echo 1 || echo 0)"
+check "approve releases the lock it took" "$([ ! -e "$H6/data/cache.lock" ] && echo 1 || echo 0)"
 printf 'x' > "$SRC4/rules/diagram.png"
 git -C "$SRC4" add -A && git -C "$SRC4" commit -qm image
 out=$(run_hook "$H6" "file://$SRC4" "")
@@ -300,6 +307,15 @@ lpart 1 >/dev/null; maxlen=0; total=0
 for k in 1 2 3 4 5 6; do o=$(lpart $k); [ ${#o} -gt $maxlen ] && maxlen=${#o}; total=$((total + $(printf '%s' "$o" | tr -cd z | wc -c))); done
 check "a 25,000-character line: every slice under 10,000 characters (max $maxlen)" "$([ $maxlen -le 10000 ] && echo 1 || echo 0)"
 check "a 25,000-character line: all of it delivered across slices" "$([ $total -eq 25000 ] && echo 1 || echo 0)"
+# Multi-byte text cut at a slice boundary must stay valid UTF-8, whichever awk is installed.
+UTF="$TMP_DIR/utf"; mkdir -p "$UTF/hooks" "$UTF/rules"; cp "$HOOK" "$UTF/hooks/"
+{ echo '# Dashes'; printf x; for _ in $(seq 1 8000); do printf '\342\200\224'; done; echo; } > "$UTF/rules/dashes.md"
+H23="$TMP_DIR/h23"; mkdir -p "$H23"
+upart() { printf '{"session_id":"u"}' | env -i HOME="$H23" PATH="$PATH" LANG=C.UTF-8 CLAUDE_PLUGIN_DATA="$H23/data" bash "$UTF/hooks/load-rules.sh" part "$1" 6; }
+upart 1 >/dev/null; ok=1; dashes=0
+for k in 1 2 3 4 5 6; do o=$(upart $k); printf '%s' "$o" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || ok=0; dashes=$((dashes + $(printf '%s' "$o" | grep -o $'\xe2\x80\x94' | wc -l))); done
+check "a long line of multi-byte characters: every slice is valid UTF-8" "$ok"
+check "a long line of multi-byte characters: all of it delivered ($dashes of 8000)" "$([ $dashes -eq 8000 ] && echo 1 || echo 0)"
 
 # --- Local install of the same repo under another spelling of its URL ---
 for variant in "https://github.com/bogheorghiu/claude-rules.git" "https://github.com/bogheorghiu/claude-rules/" "git@github.com:bogheorghiu/claude-rules.git" "ssh://git@github.com/bogheorghiu/claude-rules.git" "https://github.com/BogHeorghiu/Claude-Rules"; do

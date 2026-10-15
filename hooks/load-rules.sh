@@ -19,10 +19,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "${1:-}" = approve ]; then
     # A full sha only: names like FETCH_HEAD move, and would let a later push ride along.
     # 40 or 64 hex digits: a SHA-256 repo's ids are longer, and must stay approvable.
-    if [[ "${2:-}" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && git -C "$CACHE" reset -q --hard "$2" 2>/dev/null; then
+    # Under the cache lock, so it can't race a session start's fetch and reset.
+    lock="$(dirname "$CACHE")/cache.lock"; locked=""
+    for _ in $(seq 1 100); do mkdir "$lock" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
+    if [ -n "$locked" ] && [[ "${2:-}" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && git -C "$CACHE" reset -q --hard "$2" 2>/dev/null; then
+        rmdir "$lock" 2>/dev/null
         echo "[shared-rules] Approved $2; these rules load from the next session on."
         exit 0
     fi
+    [ -n "$locked" ] && rmdir "$lock" 2>/dev/null
+    [ -n "$locked" ] || { echo "[shared-rules] Could not approve: a session start is still updating the rules. Try again in a minute." >&2; exit 1; }
     echo "[shared-rules] Could not approve '${2:-}': not a version fetched into $CACHE." >&2
     exit 1
 fi
@@ -189,7 +195,8 @@ if [ "$PART" = 1 ]; then
     LOCK="$OUT/cache.lock"
     find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
     locked=""
-    for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
+    # ~20 s: with a 15 s network step after it, slice 1 stays inside the 45 s hook timeout.
+    for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
     ( render ) > "$RENDER.tmp.$$" 2>/dev/null
     # Rendering after a timed-out wait goes ahead, but the lock is another run's to release.
     [ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
@@ -210,8 +217,10 @@ else
 fi
 
 # Pack whole blocks (each starts at a "=== " line) into slices under LIMIT. A block
-# longer than LIMIT is split between lines, and a line longer than LIMIT is cut.
-awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$RENDER" '
+# longer than LIMIT is split between lines, and a line longer than LIMIT is cut. Bytes,
+# not characters (LC_ALL=C): every awk then counts alike, and a cut is moved back off
+# UTF-8 continuation bytes so no character is split.
+LC_ALL=C awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$RENDER" '
     function flush() { if (cur != "") { chunk[++c] = cur; from[c] = curfrom; cur = "" } }
     function add(t, at) { if (cur != "" && length(cur) + length(t) > lim) flush(); if (cur == "") curfrom = at; cur = cur t }
     function addline(l) {
@@ -221,7 +230,10 @@ awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$
     }
     /^=== / { if (blk != "") add(blk, blkfrom); blk = "" }
     { line = $0 "\n"
-      while (length(line) > lim) { addline(substr(line, 1, lim) "\n"); line = substr(line, lim + 1) }
+      while (length(line) > lim) {
+          cut = lim; while (cut > 1 && substr(line, cut + 1, 1) ~ /^[\200-\277]/) cut--
+          addline(substr(line, 1, cut) "\n"); line = substr(line, cut + 1)
+      }
       addline(line) }
     END {
         if (blk != "") add(blk, blkfrom); flush()
