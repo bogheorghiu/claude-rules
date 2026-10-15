@@ -43,13 +43,18 @@ check "ask (default): new rule not applied" "$([ ! -e "$A/.claude/rules/shared/r
 check "ask: notice names the new version" "$(has "$out" "newer version $want")"
 check "ask: notice lists the changed file" "$(has "$out" 'rules/two.md')"
 approve=$(printf '%s\n' "$out" | grep -E '^ +git -C .* reset -q --hard ' | sed 's/^ *//')
-env -i HOME="$A" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null bash -c "$approve" >/dev/null 2>&1
+env -i HOME="$A" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1
 check "ask: the printed approve command applies it" "$([ -f "$A/.claude/rules/shared/rules/two.md" ] && echo 1 || echo 0)"
 check "ask: the install stays sparse after approval" "$([ ! -e "$A/.claude/rules/shared/README.md" ] && echo 1 || echo 0)"
 
 printf 'readme 2\n' > "$SRC/README.md"; commit readme
 out=$(run "$A")
 check "a change outside rules/ applies silently" "$([ -z "$out" ] && [ "$(git -C "$A/.claude/rules/shared" rev-parse HEAD)" = "$(git -C "$SRC" rev-parse HEAD)" ] && echo 1 || echo 0)"
+
+printf '\n# changed upstream\n' >> "$SRC/hooks/local-update.sh"; commit script
+out=$(run "$A")
+check "ask: a change to this script waits for approval too" "$(has "$out" 'hooks/local-update.sh')"
+check "ask: the changed script is not applied" "$([ "$(git -C "$A/.claude/rules/shared" rev-parse HEAD)" != "$(git -C "$SRC" rev-parse HEAD)" ] && echo 1 || echo 0)"
 
 printf '# Three\nTHREE\n' > "$SRC/rules/three.md"; commit three
 out=$(run "$A" Auto)

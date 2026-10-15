@@ -138,9 +138,9 @@ git -C "$SRC4" add -A && git -C "$SRC4" commit -qm readme
 out=$(run_hook "$H6" "file://$SRC4" "")
 check "ask: a change outside rules/ asks nothing" "$([ "$(has "$out" 'awaiting the user')" = 0 ] && echo 1 || echo 0)"
 check "ask: a change outside rules/ advances the cache" "$([ "$(git -C "$H6/data/claude-rules" rev-parse HEAD)" = "$(git -C "$SRC4" rev-parse HEAD)" ] && echo 1 || echo 0)"
-env -i HOME="$H6" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve 0000000000000000000000000000000000000000 >/dev/null 2>&1; rc=$?
+env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve 0000000000000000000000000000000000000000 >/dev/null 2>&1; rc=$?
 check "ask: approving an unknown version fails" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
-env -i HOME="$H6" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve FETCH_HEAD >/dev/null 2>&1; rc=$?
+env -i HOME="$H6" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null CLAUDE_PLUGIN_DATA="$H6/data" bash "$HOOK" approve FETCH_HEAD >/dev/null 2>&1; rc=$?
 check "ask: approve refuses a moving name like FETCH_HEAD" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
 printf 'x' > "$SRC4/rules/diagram.png"
 git -C "$SRC4" add -A && git -C "$SRC4" commit -qm image
@@ -260,8 +260,11 @@ o=$(part "$H11" sessA 2 2)
 check "overflow: last hook says more rules did not fit" "$(has "$o" 'did not fit')"
 check "overflow: says where to resume reading" "$(has "$o" 'from line')"
 ln=$(printf '%s' "$o" | sed -n 's/.* from line \([0-9]*\) to the end.*/\1/p')
-first_left=$(sed -n "${ln}p" "$H11/data/render-sessA.txt")
-check "overflow: that line is where the first left-out slice begins" "$([ "$(has "$all" "$first_left")" = 0 ] || [ "$(has "$(part "$H11" sessA 1 2)$(part "$H11" sessA 2 2)" "$first_left")" = 0 ] && echo 1 || echo 0)"
+# Exactly that line: a block header left out of the two hooks, whose preceding rule made it in.
+two="$(part "$H11" sessA 1 2)$(part "$H11" sessA 2 2)"
+first_left=$(sed -n "${ln:-0}p" "$H11/data/render-sessA.txt" 2>/dev/null)
+last_in=$(head -n "$(( ${ln:-1} - 1 ))" "$H11/data/render-sessA.txt" | grep '^=== ' | tail -1)
+check "overflow: that line is where the first left-out slice begins" "$([ -n "$ln" ] && [ -n "$last_in" ] && case "$first_left" in "=== "*) true ;; *) false ;; esac && [ "$(has "$two" "$first_left")" = 0 ] && [ "$(has "$two" "$last_in")" = 1 ] && echo 1 || echo 0)"
 check "overflow: points at the full render" "$(has "$o" "$H11/data/render-sessA.txt")"
 
 # One render per session: a source change mid-start doesn't split versions across slices.
@@ -325,6 +328,31 @@ mv "$SRC3" "$SRC3.gone"
 o=$(run_hook "$H5" "file://$SRC3")
 mv "$SRC3.gone" "$SRC3"
 check "unreachable source, empty cache: says the refresh failed" "$(has "$o" 'could not refresh')"
+
+# --- A token in the repo URL never reaches the session's context ---
+H20="$TMP_DIR/h20"; mkdir -p "$H20"
+o=$(run_hook "$H20" "https://user:SECRET_TOKEN@127.0.0.1:1/none.git")
+check "token in repo URL: not printed" "$([ "$(has "$o" SECRET_TOKEN)" = 0 ] && [ "$(has "$o" '127.0.0.1:1/none.git')" = 1 ] && echo 1 || echo 0)"
+
+# --- Frontmatter never closed: no frontmatter, so the rule loads in full ---
+SRC10="$TMP_DIR/src10"; mkdir -p "$SRC10/rules"
+printf -- '---\n# Dashes, no frontmatter\npaths: mentioned in prose\nUNCLOSED_BODY\n' > "$SRC10/rules/unclosed.md"
+git -C "$SRC10" init -q && git -C "$SRC10" add -A && git -C "$SRC10" commit -qm init
+H21="$TMP_DIR/h21"; mkdir -p "$H21"
+check "unclosed frontmatter: rule printed in full" "$(has "$(run_hook "$H21" "file://$SRC10")" '=== rule: unclosed.md ===')"
+
+# --- A SHA-256 rules repo: its 64-digit versions can be approved ---
+SRC11="$TMP_DIR/src11"; mkdir -p "$SRC11/rules"
+printf '# A\nA_BODY\n' > "$SRC11/rules/a.md"
+if git -C "$SRC11" init -q --object-format=sha256 2>/dev/null; then
+    git -C "$SRC11" add -A && git -C "$SRC11" commit -qm init
+    H22="$TMP_DIR/h22"; mkdir -p "$H22"
+    run_hook "$H22" "file://$SRC11" "" >/dev/null
+    printf '# B\nB_BODY\n' > "$SRC11/rules/b.md"; git -C "$SRC11" add -A && git -C "$SRC11" commit -qm b
+    approve=$(run_hook "$H22" "file://$SRC11" "" | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
+    env -i HOME="$H22" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1; rc=$?
+    check "sha256 repo: printed approve command works" "$([ $rc -eq 0 ] && [ "$(has "$(run_hook "$H22" "file://$SRC11" "")" B_BODY)" = 1 ] && echo 1 || echo 0)"
+fi
 
 # --- Mode is case-insensitive ---
 printf '# Second\nSECOND_BODY\n' > "$SRC7/rules/second.md"

@@ -43,7 +43,8 @@ git -C ~/.claude/rules/shared checkout
 Then add a SessionStart hook to `~/.claude/settings.json` that checks for updates.
 Choose the mode at the end of the command:
 
-- `ask` (recommended): new or changed rules wait for your approval. Claude tells you
+- `ask` (recommended): new or changed rules, and changes to the update script itself,
+  wait for your approval. Claude tells you
   what changed at the start of a session and applies the update only if you say yes.
 - `auto`: they're applied as soon as they're published.
 

@@ -18,7 +18,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # along on an approval given for something else.
 if [ "${1:-}" = approve ]; then
     # A full sha only: names like FETCH_HEAD move, and would let a later push ride along.
-    if [[ "${2:-}" =~ ^[0-9a-f]{40}$ ]] && git -C "$CACHE" reset -q --hard "$2" 2>/dev/null; then
+    # 40 or 64 hex digits: a SHA-256 repo's ids are longer, and must stay approvable.
+    if [[ "${2:-}" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && git -C "$CACHE" reset -q --hard "$2" 2>/dev/null; then
         echo "[shared-rules] Approved $2; these rules load from the next session on."
         exit 0
     fi
@@ -51,7 +52,9 @@ git_net() {
     "${t[@]}" git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 "$@" >/dev/null 2>&1
 }
 
-SOURCE_LABEL="${REPO_URL:-rules bundled with this plugin}"
+# Shown to the model and in notices: drop any user:token@ part, which belongs in no transcript.
+SHOWN_URL=$(printf '%s' "$REPO_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#')
+SOURCE_LABEL="${SHOWN_URL:-rules bundled with this plugin}"
 render() {
     stale=""
     pending=""
@@ -113,11 +116,11 @@ render() {
         if [ -z "$REPO_URL" ]; then
             echo "[shared-rules] No shared rules loaded this session: this plugin version ships no rules."
         elif [ ! -d "$CACHE/.git" ]; then
-            echo "[shared-rules] No shared rules loaded this session: could not fetch $REPO_URL and nothing is cached."
+            echo "[shared-rules] No shared rules loaded this session: could not fetch $SHOWN_URL and nothing is cached."
         elif [ -n "$stale" ]; then
-            echo "[shared-rules] No shared rules loaded this session: could not refresh $REPO_URL, and the cached copy has no .md files under rules/."
+            echo "[shared-rules] No shared rules loaded this session: could not refresh $SHOWN_URL, and the cached copy has no .md files under rules/."
         else
-            echo "[shared-rules] No shared rules loaded this session: $REPO_URL was fetched but has no .md files under rules/."
+            echo "[shared-rules] No shared rules loaded this session: $SHOWN_URL was fetched but has no .md files under rules/."
         fi
         exit 0
     fi
@@ -125,7 +128,8 @@ render() {
     # The \r strip matters: a rule committed from Windows has CRLF endings, its
     # '---\r' would never match the delimiter, and a path-scoped rule would load in full.
     frontmatter() {
-        awk '{sub(/\r$/, "")} NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 {print}' "$1"
+        # Unclosed frontmatter is no frontmatter: the file loads in full, never as a listing.
+        awk '{sub(/\r$/, "")} NR==1 && $0!="---" {exit} NR>1 && $0=="---" {closed=1; exit} NR>1 {buf = buf $0 "\n"} END {if (closed) printf "%s", buf}' "$1"
     }
 
     scoped=()
@@ -184,9 +188,11 @@ if [ "$PART" = 1 ]; then
     # Sessions starting together share the cache: one fetch/render at a time.
     LOCK="$OUT/cache.lock"
     find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
-    for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && break; sleep 0.2; done
+    locked=""
+    for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
     ( render ) > "$RENDER.tmp.$$" 2>/dev/null
-    rmdir "$LOCK" 2>/dev/null
+    # Rendering after a timed-out wait goes ahead, but the lock is another run's to release.
+    [ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
     echo "$started" > "$RENDER.ts.tmp.$$"
     mv "$RENDER.tmp.$$" "$RENDER" && mv "$RENDER.ts.tmp.$$" "$RENDER.ts"
 else
