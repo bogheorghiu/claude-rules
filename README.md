@@ -19,6 +19,11 @@ out of step with it.
   only when you work on matching files. In cloud sessions the plugin lists it with
   its path patterns and says where to read it (see below).
 - This repo is public, so a rule must hold nothing personal and no secrets.
+- Plugin users get the new rule with their next plugin update. The plugin carries no
+  version number on purpose: Claude Code then versions it by commit, so every commit
+  counts as an update and adding a rule stays one file. Claude Code doesn't
+  auto-update third-party marketplaces by default; run `/plugin update`, or turn on
+  auto-update for this marketplace.
 
 ## Delivery
 
@@ -68,24 +73,42 @@ If the rules aren't listed, Claude Code isn't reading subfolders of
 `~/.claude/rules/`. Clone the repo somewhere else and copy (or symlink) the files from
 `rules/` directly into `~/.claude/rules/`.
 
-### 2. Cloud sessions and other sessions with no `~/.claude`
+### 2. The plugin: cloud sessions, and anywhere without the local install
 
-Install the `shared-rules` plugin from the `ex-cog-dev` marketplace. Its SessionStart
-hook fetches this repo into the plugin's data folder (or updates it there), then
-prints the rules into the session's context:
+This repo is also a Claude Code plugin marketplace with one plugin, `shared-rules`:
+
+```
+/plugin marketplace add bogheorghiu/claude-rules
+/plugin install shared-rules@claude-rules
+```
+
+Its SessionStart hook prints the rules into the session's context:
 
 - **A rule without `paths:`** is printed in full.
-- **A path-scoped rule** is listed with its `paths:` block and the file location, and
+- **A path-scoped rule** is listed with its `paths:` block and file location, and
   Claude is told to read it before working on matching files. A hook can't load a
-  rule conditionally the way Claude Code does locally. Printing the whole rule would
-  spend context on rules that may never apply. Dropping it would hide it. Listing it
-  keeps it findable at the cost of one read.
-- **Offline, nothing cached yet:** the hook prints one line saying no shared rules
-  were loaded. Without that line, a failed fetch would look the same as having no
-  rules.
-- **Machines that already have the local install** (`~/.claude/rules/shared` exists):
-  the hook prints nothing, because Claude Code already loads those rules and they
-  would otherwise appear twice.
+  rule conditionally the way Claude Code does locally; printing it would spend
+  context on rules that may never apply, and dropping it would hide it.
+- **Machines with the local install of the same repo** get nothing from the plugin,
+  because Claude Code already loads those rules and they would otherwise appear twice.
+
+**Settings** (Claude Code asks when you enable the plugin):
+
+- **Rules repository.** Empty by default: the plugin loads the rules shipped inside
+  it, so they change only when the plugin updates. Set a git URL to load your own
+  repo's `rules/` folder instead.
+- **Rule updates** (for your own repo): `ask` (default) or `auto`. With `ask`, rules
+  added or changed after you installed wait for your approval: Claude tells you what
+  changed at the start of a session and applies the update only if you say yes. With
+  `auto`, they load as soon as they're published. One limit: approvals are remembered
+  in the plugin's data folder, so a container that starts empty every time has no
+  record of them and loads whatever the repo holds at that moment.
+
+**What it runs and fetches.** With no repository set, nothing: it reads the rule files
+shipped with it. With your own repository set, each session start runs `git` to clone
+it (or update the saved copy) into the plugin's data folder. It sends nothing anywhere
+else, and the rule files are read as text, never executed. The approve command it
+offers runs `git reset` in that saved copy, and only when you approve.
 
 ### 3. Claude desktop / claude.ai app
 

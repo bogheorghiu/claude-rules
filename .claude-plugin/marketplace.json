@@ -1,0 +1,14 @@
+{
+  "name": "claude-rules",
+  "description": "One shared set of Claude rules, and the plugin that loads it into sessions.",
+  "owner": {
+    "name": "bogheorghiu",
+    "url": "https://github.com/bogheorghiu"
+  },
+  "plugins": [
+    {
+      "name": "shared-rules",
+      "source": "./"
+    }
+  ]
+}
