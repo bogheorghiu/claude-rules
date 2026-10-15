@@ -176,7 +176,10 @@ printf '# Three\nTHREE_BODY\n' > "$SRC5/rules/three.md"
 git -C "$SRC5" add -A && git -C "$SRC5" commit -qm three
 approve=$(quoted | grep -E '^ +CLAUDE_PLUGIN_DATA=.* approve ' | sed 's/^ *//')
 env -i HOME="$H8" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c "$approve" >/dev/null 2>&1; rc=$?
+want=$(git -C "$SRC5" rev-parse HEAD)
+check "data path with a quote: notice prints an approve command for the new version" "$(has "$approve" "approve $want")"
 check "data path with a quote: printed approve command works" "$([ $rc -eq 0 ] && echo 1 || echo 0)"
+check "data path with a quote: the approved rule then loads" "$(has "$(quoted)" THREE_BODY)"
 
 # --- Source unreachable, no cache: one-line notice, exit 0 ---
 H2="$TMP_DIR/h2"; mkdir -p "$H2"
