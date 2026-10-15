@@ -246,7 +246,7 @@ check "slicing: six parallel slices still carry every rule exactly once" "$ok"
 # Fewer hooks than slices: the last hook names the rules left out and where to read them.
 o=$(part "$H11" sessA 2 2)
 check "overflow: last hook says more rules did not fit" "$(has "$o" 'did not fit')"
-check "overflow: names a rule left out" "$(has "$o" 'big8.md')"
+check "overflow: says where to resume reading" "$(has "$o" 'from the line that starts')"
 check "overflow: points at the full render" "$(has "$o" "$H11/data/render-sessA.txt")"
 
 # One render per session: a source change mid-start doesn't split versions across slices.
@@ -260,8 +260,37 @@ fpart() { printf '{"session_id":"%s"}' "$2" | env -i HOME="$H13" PATH="$PATH" GI
 fpart 1 sessC >/dev/null
 printf '# S6b\nS6B_BODY\n' > "$SRC6/rules/s6b.md"
 git -C "$SRC6" add -A && git -C "$SRC6" commit -qm more
-check "one render per session: a later slice reuses it" "$([ "$(has "$(fpart 1 sessC)$(fpart 2 sessC)" S6B_BODY)" = 0 ] && echo 1 || echo 0)"
+fpart 2 sessC >/dev/null
+check "one render per start: a later slice reuses slice 1's render" "$([ "$(has "$(cat "$H13/data/render-sessC.txt")" S6B_BODY)" = 0 ] && echo 1 || echo 0)"
+check "a later start of the same session (compact, resume) renders afresh" "$(has "$(fpart 1 sessC)" S6B_BODY)"
 check "a new session renders afresh" "$(has "$(fpart 1 sessD)" S6B_BODY)"
+
+# --- Hostile sizes: many rules, one huge line ---
+MANY="$TMP_DIR/many"; mkdir -p "$MANY/hooks" "$MANY/rules"; cp "$HOOK" "$MANY/hooks/"
+for i in $(seq 1 200); do printf '# Rule %s with a fairly long title to pad the heading line\n%s\n' "$i" "$(head -c 300 /dev/zero | tr '\0' 'y')" > "$MANY/rules/a-rather-long-rule-file-name-number-$i.md"; done
+H14="$TMP_DIR/h14"; mkdir -p "$H14"
+mpart() { printf '{"session_id":"m"}' | env -i HOME="$H14" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H14/data" bash "$MANY/hooks/load-rules.sh" part "$1" 6; }
+mpart 1 >/dev/null; o=$(mpart 6)
+check "200 rules: the last slice stays under 10,000 characters (${#o})" "$([ ${#o} -le 10000 ] && echo 1 || echo 0)"
+check "200 rules: the last slice says the rest did not fit" "$(has "$o" 'did not fit')"
+LONG="$TMP_DIR/long"; mkdir -p "$LONG/hooks" "$LONG/rules"; cp "$HOOK" "$LONG/hooks/"
+{ echo '# Long'; head -c 25000 /dev/zero | tr '\0' 'z'; echo; } > "$LONG/rules/long.md"
+H15="$TMP_DIR/h15"; mkdir -p "$H15"
+lpart() { printf '{"session_id":"l"}' | env -i HOME="$H15" PATH="$PATH" CLAUDE_PLUGIN_DATA="$H15/data" bash "$LONG/hooks/load-rules.sh" part "$1" 6; }
+lpart 1 >/dev/null; maxlen=0; total=0
+for k in 1 2 3 4 5 6; do o=$(lpart $k); [ ${#o} -gt $maxlen ] && maxlen=${#o}; total=$((total + $(printf '%s' "$o" | tr -cd z | wc -c))); done
+check "a 25,000-character line: every slice under 10,000 characters (max $maxlen)" "$([ $maxlen -le 10000 ] && echo 1 || echo 0)"
+check "a 25,000-character line: all of it delivered across slices" "$([ $total -eq 25000 ] && echo 1 || echo 0)"
+
+# --- Local install of the same repo under another spelling of its URL ---
+for variant in "https://github.com/bogheorghiu/claude-rules.git" "https://github.com/bogheorghiu/claude-rules/" "git@github.com:bogheorghiu/claude-rules.git"; do
+    git -C "$H10/.claude/rules/shared" remote set-url origin "$variant"
+    check "bundled + local install as $variant: prints nothing" "$([ -z "$(bundled "$H10")" ] && echo 1 || echo 0)"
+done
+
+# --- A cache folder left without .git doesn't swallow later clones ---
+H16="$TMP_DIR/h16"; mkdir -p "$H16/data/claude-rules/junk"
+check "leftover cache folder without .git: rules still load" "$(has "$(run_hook "$H16" "file://$SRC6")" S6_BODY)"
 
 echo
 echo "$pass passed, $fail failed"

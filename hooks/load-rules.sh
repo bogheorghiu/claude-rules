@@ -29,9 +29,11 @@ fi
 # A local install of the same repo already makes Claude Code load these rules
 # natively; printing them again would put every rule in context twice. (-e, not -d:
 # a submodule or worktree checkout has a .git *file*.) Bundled rules are this repo's.
+# URLs compare after normalising the spellings of one repo: .git, a trailing /, SSH.
+norm() { local u="${1%/}"; u="${u%.git}"; case "$u" in git@*:*) u="${u#git@}"; u="https://${u/://}" ;; esac; echo "$u"; }
 LOCAL="$HOME/.claude/rules/shared"
-if [ -e "$LOCAL/.git" ] && [ "$(git -C "$LOCAL" remote get-url origin 2>/dev/null)" = \
-     "${REPO_URL:-https://github.com/bogheorghiu/claude-rules}" ]; then
+if [ -e "$LOCAL/.git" ] && [ "$(norm "$(git -C "$LOCAL" remote get-url origin 2>/dev/null)")" = \
+     "$(norm "${REPO_URL:-https://github.com/bogheorghiu/claude-rules}")" ]; then
     exit 0
 fi
 
@@ -84,6 +86,7 @@ render() {
             mkdir -p "$(dirname "$CACHE")" 2>/dev/null
             tmp="$CACHE.tmp.$$"
             if git_net clone --depth 1 -q "$REPO_URL" "$tmp"; then
+                rm -rf "$CACHE"   # a leftover without .git would swallow the clone
                 mv "$tmp" "$CACHE"
             fi
             rm -rf "$tmp"
@@ -154,43 +157,52 @@ PART="${2:-1}"; PARTS="${3:-1}"
 [ "${1:-}" = part ] || { PART=1; PARTS=1; }
 LIMIT=9000   # under 10,000, leaving room for the wrapper lines
 
-# Render once per session start, so every slice comes from the same version. The
-# session id on stdin names the render; parallel slices wait on a lock for it.
+# Render once per session start, so every slice comes from the same version. Only
+# slice 1 fetches and renders; the others wait for its render, so no two slices ever
+# touch the cache at once. A render counts only if it began within this start (a
+# later /compact or resume fires SessionStart again with the same session id).
 OUT="${CLAUDE_PLUGIN_DATA:-$HOME/.cache/shared-rules}"
 mkdir -p "$OUT" 2>/dev/null
+started=$(date +%s)
 sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' 2>/dev/null | head -1)
 RENDER="$OUT/render-${sid:-$$}.txt"
-LOCK="$OUT/render.lock"
-find "$OUT" -maxdepth 1 -name 'render-*.txt' -mtime +1 -exec rm -f {} + 2>/dev/null
-find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
-locked=""
-for _ in $(seq 1 150); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
-if [ ! -s "$RENDER" ] || [ -z "$sid" ]; then
+find "$OUT" -maxdepth 1 -name 'render-*' -mtime +1 -exec rm -f {} + 2>/dev/null
+if [ "$PART" = 1 ]; then
     ( render ) > "$RENDER.tmp.$$" 2>/dev/null
-    mv "$RENDER.tmp.$$" "$RENDER"
+    echo "$started" > "$RENDER.ts.tmp.$$"
+    mv "$RENDER.tmp.$$" "$RENDER" && mv "$RENDER.ts.tmp.$$" "$RENDER.ts"
+else
+    [ -n "$sid" ] || exit 0
+    for _ in $(seq 1 200); do
+        ts=$(cat "$RENDER.ts" 2>/dev/null)
+        [ -n "$ts" ] && [ "$ts" -ge $((started - 5)) ] && [ -s "$RENDER" ] && break
+        ts=""; sleep 0.2
+    done
+    [ -n "$ts" ] || exit 0
 fi
-[ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
 
-# Pack whole blocks (each starts at a "=== " line) into slices under LIMIT; a block
-# longer than LIMIT on its own is split between lines.
+# Pack whole blocks (each starts at a "=== " line) into slices under LIMIT. A block
+# longer than LIMIT is split between lines, and a line longer than LIMIT is cut.
 awk -v k="$PART" -v n="$PARTS" -v lim="$LIMIT" -v src="$SOURCE_LABEL" -v file="$RENDER" '
     function flush() { if (cur != "") { chunk[++c] = cur; cur = "" } }
     function add(t) { if (cur != "" && length(cur) + length(t) > lim) flush(); cur = cur t }
+    function addline(l) {
+        if (length(blk) + length(l) > lim) { add(blk); flush(); blk = "" }
+        blk = blk l
+    }
     /^=== / { if (blk != "") add(blk); blk = "" }
     { line = $0 "\n"
-      if (length(blk) + length(line) > lim) { add(blk); flush(); blk = "" }
-      blk = blk line }
+      while (length(line) > lim) { addline(substr(line, 1, lim) "\n"); line = substr(line, lim + 1) }
+      addline(line) }
     END {
         if (blk != "") add(blk); flush()
-        for (i = n + 1; i <= c; i++) {        # names of the rules that did not fit
-            m = split(chunk[i], ls, "\n")
-            for (j = 1; j <= m; j++) if (ls[j] ~ /^=== rule: /) { sub(/^=== rule: /, "", ls[j]); sub(/ ===$/, "", ls[j]); rest = rest "    " ls[j] "\n" }
-        }
         if (k > c) exit
-        last = (c > n && k == n)
         printf "<shared-rules source=\"%s\" part=\"%d of %d\">\n", src, k, (c < n ? c : n)
         printf "%s", chunk[k]
-        if (last) printf "\n=== more rules ===\nThese did not fit in this session'"'"'s hooks; read them in %s before other work:\n%s", file, rest
+        if (c > n && k == n) {
+            split(chunk[n + 1], first, "\n")
+            printf "\n=== more rules ===\nThe rest (%d more slice(s)) did not fit in this session'"'"'s hooks. Before other work, read %s from the line that starts:\n    %s\n", c - n, file, substr(first[1], 1, 200)
+        }
         print "</shared-rules>"
     }' "$RENDER"
 exit 0
