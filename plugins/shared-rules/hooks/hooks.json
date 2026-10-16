@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 1 6",
+            "timeout": 45
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 2 6",
+            "timeout": 45
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 3 6",
+            "timeout": 45
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 4 6",
+            "timeout": 45
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 5 6",
+            "timeout": 45
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 6 6",
+            "timeout": 45
+          }
+        ]
+      }
+    ]
+  }
+}

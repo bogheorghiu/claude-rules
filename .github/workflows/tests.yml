@@ -1,0 +1,25 @@
+name: Tests
+
+# Runs every test suite. Each is registered here by name: an unregistered suite never
+# runs, which looks the same as one that passes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hook-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shared-rules hook
+        run: bash plugins/shared-rules/hooks/sync-rules.test.sh
+      - name: shared-rules-custom-repo hook
+        run: bash plugins/shared-rules-custom-repo/hooks/sync-repo.test.sh
+      - name: shared tail kept identical
+        run: bash tests/shared-tail.test.sh

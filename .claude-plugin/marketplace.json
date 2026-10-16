@@ -1,0 +1,18 @@
+{
+  "name": "claude-rules",
+  "description": "A shared set of Claude rules, kept in your own ~/.claude/rules folder and updated without overwriting your edits.",
+  "owner": {
+    "name": "bogheorghiu",
+    "url": "https://github.com/bogheorghiu"
+  },
+  "plugins": [
+    {
+      "name": "shared-rules",
+      "source": "./plugins/shared-rules"
+    },
+    {
+      "name": "shared-rules-custom-repo",
+      "source": "./plugins/shared-rules-custom-repo"
+    }
+  ]
+}
