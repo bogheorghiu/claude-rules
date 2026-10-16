@@ -1,3 +1,5 @@
+> **Superseded** by `PREREG-0.5.md` (the 0.5 design). Kept as the record of the earlier run.
+
 # Pre-registration: live CLI test of the shared-rules plugin
 
 Written 2026-10-15, before any run of `tests/live/live.py`. The plugin goes to the
