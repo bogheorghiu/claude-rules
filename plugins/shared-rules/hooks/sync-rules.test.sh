@@ -259,6 +259,19 @@ for k in 1 2 3 4 5 6; do o=$(upart $k); printf '%s' "$o" | iconv -f UTF-8 -t UTF
 check "a long line of multi-byte characters: every slice is valid UTF-8" "$ok"
 check "a long line of multi-byte characters: all of it delivered ($dashes of 8000)" "$([ $dashes -eq 8000 ] && echo 1 || echo 0)"
 
+# --- Entry points: hooks.json names part-K.sh with no arguments; each runs slice K of 6 ---
+ep() { local h="$TMP_DIR/ep"; rm -rf "$h"; mkdir -p "$h"; printf '{"session_id":"e"}' | env -i HOME="$h" PATH="$PATH" LANG=C.UTF-8 CLAUDE_PLUGIN_DATA="$h/data" CLAUDE_PLUGIN_ROOT="$UTF" bash "$@" 2>&1; }
+ok=1; for k in 1 2 3 4 5 6; do
+    grep -qF "/hooks/part-$k.sh" "$PLUGIN/hooks/hooks.json" || ok=0
+    [ -x "$PLUGIN/hooks/part-$k.sh" ] || ok=0
+    grep -qxF "exec \"\${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part $k 6" "$PLUGIN/hooks/part-$k.sh" || ok=0
+done
+[ "$(grep -c '"command":' "$PLUGIN/hooks/hooks.json")" = 6 ] && ! grep -q ' part [0-9]' "$PLUGIN/hooks/hooks.json" || ok=0
+# Slices 2-6 wait for slice 1's render, so only slice 1 runs here; the others differ in K alone.
+a=$(ep "$PLUGIN/hooks/part-1.sh"); b=$(ep "$UTF/hooks/sync-rules.sh" part 1 6)
+[ -n "$a" ] && [ "$a" = "$b" ] || ok=0
+check "entry points: hooks.json runs part-1..6.sh, argument-free, and each prints its own slice" "$ok"
+
 # --- Release guard: every bundled rule is in the history the next version will check ---
 ok=1; while IFS= read -r f; do grep -qxF "$(sha "$PLUGIN/rules/$f")  $f" "$PLUGIN/rules-history.txt" || ok=0; done < <(cd "$PLUGIN/rules" && find . -type f | sed 's#^\./##')
 check "release: every bundled rule (subfolders too) is in rules-history.txt" "$ok"
