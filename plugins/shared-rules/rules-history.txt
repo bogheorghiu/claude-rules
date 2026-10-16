@@ -1,3 +1,4 @@
+7249caa7995431551055725df155763484314f8770ff69c0b37fe7545fc53853  state-the-why.md
 7dd6cc454e6c8fff36dc64c5d76916a7bda854aaed8ed89ed4863fca0aa37e65  reuse-before-writing.md
 abb59eb675cd1aab3c80c4465174259a7d793949b52fea0369135d064bb5fdff  falsification-station-per-handoff.md
 b4434b1a97e4e73e7fb3e6cfc8d3761e758cea00e02cc033fc7638f82ceff0c0  preregister-ship-decision.md

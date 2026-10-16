@@ -2,9 +2,10 @@
 
 A shared set of rules for Claude Code, installed into your own rules folder so they
 apply in every project and every session. The rules cover working habits that hold
-across projects: pre-register what would count as success before you test, check each
-hand-off against its source, verify a delegated agent's work against what it changed,
-build only what was asked, and make no drive-by edits. Each rule says why it exists.
+across projects: state the reason behind each decision, pre-register what would count
+as success before you test, check each hand-off against its source, verify a delegated
+agent's work against what it changed, reuse what exists before writing new code, build
+only what was asked, and make no drive-by edits. Each rule says why it exists.
 
 You can edit the rules. A later version of the plugin never overwrites your edits
 without asking you first.
@@ -81,7 +82,7 @@ nothing of yours: your edits and additions are moved, never removed.
 **It never:** changes settings, sends data anywhere, or runs code from outside the
 plugin.
 
-**Context cost:** about 12 KB on the first session and in fresh containers, then
+**Context cost:** about 14 KB on the first session and in fresh containers, then
 nothing. A `/compact` of the first session prints its rules again, because they never
 loaded natively in that session.
 
