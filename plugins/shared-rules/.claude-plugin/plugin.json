@@ -1,6 +1,6 @@
 {
   "name": "shared-rules",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "A shared set of Claude rules (pre-registration, falsification checks, no drive-by edits, and more) installed into ~/.claude/rules/shared-rules/, where Claude Code loads them natively and you can edit them. Plugin updates never overwrite your edits without asking.",
   "author": {
     "name": "bogheorghiu",
