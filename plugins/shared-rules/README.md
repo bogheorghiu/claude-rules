@@ -40,7 +40,7 @@ printing them in full.
 ## Install
 
 ```
-/plugin marketplace add bogheorghiu/claude-rules
+/plugin marketplace add bogheorghiu/shared-rules
 /plugin install shared-rules@claude-rules
 ```
 
@@ -114,4 +114,4 @@ repo you choose, next to this set or instead of it. It isn't part of this plugin
 
 ## Support
 
-Issues: <https://github.com/bogheorghiu/claude-rules/issues>. License: MIT.
+Issues: <https://github.com/bogheorghiu/shared-rules/issues>. License: MIT.

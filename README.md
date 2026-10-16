@@ -1,4 +1,4 @@
-# claude-rules
+# shared-rules
 
 A shared set of Claude rules, plus the plugins that install them into your own
 `~/.claude/rules/` folder. Claude Code then loads the rules natively in every project
@@ -11,7 +11,7 @@ A project that needs a sharper version keeps its own copy in its own
 ## Install
 
 ```
-/plugin marketplace add bogheorghiu/claude-rules
+/plugin marketplace add bogheorghiu/shared-rules
 /plugin install shared-rules@claude-rules
 ```
 

@@ -226,7 +226,7 @@ def s_scope(root, a, scope):
 
 def s_github(root, a):
     e = Env(root, "G1", a)
-    e.install(source=f"https://github.com/bogheorghiu/claude-rules.git#{a.branch}")
+    e.install(source=f"https://github.com/bogheorghiu/shared-rules.git#{a.branch}")
     t = e.session(ASK_HEADINGS)
     heads = bundled_headings()
     ok = all(h in t.hook_text for h in heads) and any(h in t.result for h in heads)

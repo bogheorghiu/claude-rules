@@ -42,7 +42,8 @@ echo "===================="
 # --- Setting checks ---
 H0="$TMP_DIR/h0"; mkdir -p "$H0"
 check "no repo set: says how to set one" "$(has "$(start "$H0" "")" '/plugin configure')"
-check "repo set to the shared-rules repo itself: says so, loads nothing" "$([ "$(has "$(start "$H0" "https://github.com/bogheorghiu/claude-rules.git")" 'already installs')" = 1 ] && [ ! -e "$(T "$H0")" ] && echo 1 || echo 0)"
+check "repo set to the shared-rules repo itself (old name): says so, loads nothing" "$([ "$(has "$(start "$H0" "https://github.com/bogheorghiu/claude-rules.git")" 'already installs')" = 1 ] && [ ! -e "$(T "$H0")" ] && echo 1 || echo 0)"
+check "repo set to the shared-rules repo itself (current name, SSH): says so, loads nothing" "$([ "$(has "$(start "$H0" "git@github.com:bogheorghiu/Shared-Rules.git")" 'already installs')" = 1 ] && [ ! -e "$(T "$H0")" ] && echo 1 || echo 0)"
 
 # --- First clone ---
 SRC="$TMP_DIR/src"; repo "$SRC"
