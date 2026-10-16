@@ -8,7 +8,7 @@ depends on.
 ## Install
 
 ```
-/plugin marketplace add bogheorghiu/claude-rules
+/plugin marketplace add bogheorghiu/shared-rules
 /plugin install shared-rules-custom-repo@claude-rules
 ```
 
@@ -75,4 +75,4 @@ both-or-only-yours question comes back in every cloud session.
 
 ## Support
 
-Issues: <https://github.com/bogheorghiu/claude-rules/issues>. License: MIT.
+Issues: <https://github.com/bogheorghiu/shared-rules/issues>. License: MIT.

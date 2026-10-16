@@ -19,7 +19,8 @@ TARGET="$RULES_HOME/shared-rules-custom-repo"
 MANIFEST=.custom-repo.manifest       # the commit mirrored; not .md, so never loaded as a rule
 REPLACED="$RULES_HOME/.shared-rules-replaced"   # tells shared-rules to stand down
 BASE_MANIFEST=.shared-rules.manifest
-CANONICAL=https://github.com/bogheorghiu/claude-rules
+# This repo, under its current name and the one it had before (GitHub redirects the old one).
+CANONICAL=(https://github.com/bogheorghiu/shared-rules https://github.com/bogheorghiu/claude-rules)
 
 # URLs compare after normalising the spellings of one repo: .git, a trailing /, SSH.
 norm() {
@@ -113,7 +114,9 @@ render() {
         echo "[$NAME] No rules repository is set, so no custom rules were loaded. Set one with /plugin configure shared-rules-custom-repo@claude-rules (rules_repo)."
         return
     fi
-    if [ "$(norm "$REPO_URL")" = "$(norm "$CANONICAL")" ]; then
+    local c
+    for c in "${CANONICAL[@]}"; do [ "$(norm "$REPO_URL")" = "$(norm "$c")" ] && break; c=; done
+    if [ -n "$c" ]; then
         echo "[$NAME] rules_repo points at the shared-rules repo itself, whose rules the shared-rules plugin already installs. Nothing extra was loaded; set rules_repo to your own repo."
         return
     fi
