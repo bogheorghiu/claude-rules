@@ -29,7 +29,7 @@ make_plugin() {
     cp "$HOOK" "$d/hooks/sync-rules.sh"
     printf '{\n  "name": "shared-rules",\n  "version": "%s"\n}\n' "$v" > "$d/.claude-plugin/plugin.json"
     while IFS='|' read -r name body; do mkdir -p "$d/rules/$(dirname "$name")"; printf '%b' "$body" > "$d/rules/$name"; done
-    { for p in ${HIST_FROM:-} "$d"; do (cd "$p/rules" && find . -type f | while read -r f; do sha "$f"; done); done; } | sort -u > "$d/rules-history.txt"
+    { for p in ${HIST_FROM:-} "$d"; do (cd "$p/rules" && find . -type f | sed 's#^\./##' | while read -r f; do printf '%s  %s\n' "$(sha "$f")" "$f"; done); done; } | sort -u > "$d/rules-history.txt"
 }
 # run PLUGIN HOME [args...]: one session start (or one command) of that plugin version.
 run() { local p="$1" h="$2"; shift 2
@@ -152,20 +152,55 @@ check "choose elsewhere: the user's folder is untouched" "$([ "$(ls "$(T "$E")")
 check "choose elsewhere: remembered, next session prints nothing" "$([ -z "$(start "$V1" "$E")" ] && echo 1 || echo 0)"
 o=$(start "$V2" "$E")
 check "choose elsewhere: later updates go there" "$(same_tree "$E/.claude/rules/shared-rules-plugin" "$V2/rules")"
+rm "$E/data/target"   # a reset data folder: the choice must survive it
+check "choose elsewhere: remembered even when the data folder is reset" "$([ -z "$(start "$V2" "$E")" ] && echo 1 || echo 0)"
+printf 'MY_ALT_EDIT\n' >> "$E/.claude/rules/shared-rules-plugin/keep.md"
+run "$V2" "$E" choose elsewhere "$E/bk2" >/dev/null 2>&1
+check "choose elsewhere again: edits in that folder are backed up, not deleted" "$(has "$(cat "$E/bk2/keep.md" 2>/dev/null)" MY_ALT_EDIT)"
 F="$TMP_DIR/f"; mkdir -p "$F/.claude/rules/shared-rules" "$F/.claude/rules/shared-rules-plugin"; touch "$F/.claude/rules/shared-rules-plugin/x.md"
 check "choose elsewhere: refuses when that folder is someone else's too" "$(run "$V1" "$F" choose elsewhere >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)"
 
+# --- A symlink in the folder is moved, never written through ---
+S1="$TMP_DIR/s1"; mkdir -p "$S1/.claude/rules/shared-rules" "$S1/outside"; printf 'OUTSIDE_TEXT\n' > "$S1/outside/keep.md"
+ln -s "$S1/outside/keep.md" "$S1/.claude/rules/shared-rules/keep.md"
+start "$V1" "$S1" >/dev/null; run "$V1" "$S1" choose here "$S1/bk" >/dev/null 2>&1
+check "symlink: the file it points to is untouched" "$([ "$(cat "$S1/outside/keep.md")" = OUTSIDE_TEXT ] && echo 1 || echo 0)"
+check "symlink: the link moved to the backup, the plugin's file installed" "$([ -L "$S1/bk/keep.md" ] && [ ! -L "$(T "$S1")/keep.md" ] && [ "$(same_tree "$(T "$S1")" "$V1/rules")" = 1 ] && echo 1 || echo 0)"
+# A shipped text under another name is the user's file, so it is backed up.
+S2="$TMP_DIR/s2"; mkdir -p "$S2/.claude/rules/shared-rules"; cp "$V1/rules/keep.md" "$S2/.claude/rules/shared-rules/my-copy.md"
+start "$V1" "$S2" >/dev/null; run "$V1" "$S2" choose here "$S2/bk" >/dev/null 2>&1
+check "shipped text under another name: backed up, not deleted" "$([ -f "$S2/bk/my-copy.md" ] && echo 1 || echo 0)"
+
+# --- A failed copy is reported, never announced as installed ---
+FC="$TMP_DIR/fc"; mkdir -p "$FC"; start "$V1" "$FC" >/dev/null; printf 'x\n' >> "$(T "$FC")/keep.md"
+FB="$TMP_DIR/failbin"; mkdir -p "$FB"; printf '#!/bin/sh\nexit 1\n' > "$FB/cp"; chmod +x "$FB/cp"   # every copy fails (disk full)
+env -i HOME="$FC" PATH="$FB:$PATH" CLAUDE_PLUGIN_DATA="$FC/data" bash "$V2/hooks/sync-rules.sh" apply 0.2.0 "$FC/bk" >/dev/null 2>&1; rc=$?
+check "apply whose copies fail: exits non-zero, never reports success" "$([ $rc -ne 0 ] && echo 1 || echo 0)"
+check "apply whose copies fail: the user's change is safe in the backup" "$([ -f "$FC/bk/keep.md" ] && echo 1 || echo 0)"
+
+# --- Two sessions starting together on a fresh machine both get the rules ---
+CC="$TMP_DIR/cc"; mkdir -p "$CC"
+cc() { printf '{"session_id":"%s"}' "$1" | env -i HOME="$CC" PATH="$PATH" CLAUDE_PLUGIN_DATA="$CC/data" bash "$V1/hooks/sync-rules.sh" part 1 1 > "$TMP_DIR/cc-$1.out"; }
+cc sessA & cc sessB & wait
+check "concurrent first starts: both sessions get the rules" "$([ "$(has "$(cat "$TMP_DIR/cc-sessA.out")" KEEP_V1)" = 1 ] && [ "$(has "$(cat "$TMP_DIR/cc-sessB.out")" KEEP_V1)" = 1 ] && echo 1 || echo 0)"
+
 # --- Replaced by the user's own rule set (the custom-repo add-on's choice) ---
-G="$TMP_DIR/g"; mkdir -p "$G/.claude/rules"; touch "$G/.claude/rules/.shared-rules-replaced"
-check "replaced: prints nothing" "$([ -z "$(start "$V1" "$G")" ] && echo 1 || echo 0)"
+G="$TMP_DIR/g"; mkdir -p "$G/.claude/rules" "$G/shared-rules-custom-repo-claude-rules"; touch "$G/.claude/rules/.shared-rules-replaced"
+check "replaced, add-on present: prints nothing" "$([ -z "$(start "$V1" "$G")" ] && echo 1 || echo 0)"
 check "replaced: installs nothing" "$([ ! -e "$(T "$G")" ] && echo 1 || echo 0)"
+rmdir "$G/shared-rules-custom-repo-claude-rules"   # the add-on's data folder goes when it is uninstalled
+o=$(start "$V1" "$G")
+check "replaced, add-on gone: says how to switch the bundled rules back on" "$([ "$(has "$o" 'no longer seems installed')" = 1 ] && [ "$(has "$o" ' restore')" = 1 ] && [ ! -e "$(T "$G")" ] && echo 1 || echo 0)"
+cmd=$(printf '%s\n' "$o" | grep -E '^ +CLAUDE_PLUGIN_DATA=.* restore$' | sed 's/^ *//')
+env -i HOME="$G" PATH="$PATH" bash -c "$cmd" >/dev/null 2>&1
+check "restore: the bundled rules install at the next start" "$(has "$(start "$V1" "$G")" KEEP_V1)"
 
 # --- A later start of the installing session (/compact, resume) prints the rules again ---
 K="$TMP_DIR/k"; mkdir -p "$K"
 ks() { printf '{"session_id":"%s","source":"%s"}' "$2" "${3:-startup}" | env -i HOME="$K" PATH="$PATH" CLAUDE_PLUGIN_DATA="$K/data" bash "$1/hooks/sync-rules.sh" part 1 1; }
 ks "$V1" sessK >/dev/null
 check "compact of the installing session: rules printed again" "$(has "$(ks "$V1" sessK compact)" KEEP_V1)"
-check "resume of the installing session: rules printed again" "$(has "$(ks "$V1" sessK resume)" KEEP_V1)"
+check "resume (a new process, which loads the folder natively): no reprint" "$([ -z "$(ks "$V1" sessK resume)" ] && echo 1 || echo 0)"
 check "a new startup reusing that session id (claude -p inside a session): prints nothing" "$([ -z "$(ks "$V1" sessK startup)" ] && echo 1 || echo 0)"
 check "a new session after it: prints nothing" "$([ -z "$(ks "$V1" sessL)" ] && echo 1 || echo 0)"
 ks "$V2" sessM >/dev/null
@@ -209,11 +244,12 @@ H16="$TMP_DIR/h16"; mkdir -p "$H16"; part "$H16" sessR 1 6 >/dev/null; sleep 6
 part "$H16" sessR 2 6 > "$TMP_DIR/early2.out" & sleep 1; part "$H16" sessR 1 6 >/dev/null; wait
 check "a slice never prints a previous start's render" "$([ "$(has "$(cat "$TMP_DIR/early2.out")" BIGMARK_)" = 0 ] && echo 1 || echo 0)"
 H13="$TMP_DIR/h13"; mkdir -p "$H13"; o1=$(part "$H13" sessO 1 2); o=$(part "$H13" sessO 2 2)
-check "overflow: last hook says more rules did not fit, and where to read" "$([ "$(has "$o" 'did not fit')" = 1 ] && [ "$(has "$o" "$H13/data/render-sessO.txt")" = 1 ] && echo 1 || echo 0)"
+RF=$(ls "$H13"/data/render-sessO-*.txt 2>/dev/null | head -1)
+check "overflow: last hook says more rules did not fit, and where to read" "$([ "$(has "$o" 'did not fit')" = 1 ] && [ -n "$RF" ] && [ "$(has "$o" "$RF")" = 1 ] && echo 1 || echo 0)"
 ln=$(printf '%s' "$o" | sed -n 's/.* from line \([0-9]*\) to the end.*/\1/p')
 two="$o1$o"
-first_left=$(sed -n "${ln:-0}p" "$H13/data/render-sessO.txt" 2>/dev/null)
-last_in=$(head -n "$(( ${ln:-1} - 1 ))" "$H13/data/render-sessO.txt" | grep '^=== ' | tail -1)
+first_left=$(sed -n "${ln:-0}p" "$RF" 2>/dev/null)
+last_in=$(head -n "$(( ${ln:-1} - 1 ))" "$RF" | grep '^=== ' | tail -1)
 check "overflow: that line is where the first left-out rule begins" "$([ -n "$ln" ] && [ -n "$last_in" ] && case "$first_left" in "=== "*) true ;; *) false ;; esac && [ "$(has "$two" "$first_left")" = 0 ] && [ "$(has "$two" "$last_in")" = 1 ] && echo 1 || echo 0)"
 UTF="$TMP_DIR/utf"; make_plugin "$UTF" 0.1.0 < <(printf 'dashes.md|# Dashes\\nx%s\\n\n' "$(for _ in $(seq 1 8000); do printf '\342\200\224'; done)")
 H14="$TMP_DIR/h14"; mkdir -p "$H14"
@@ -224,8 +260,8 @@ check "a long line of multi-byte characters: every slice is valid UTF-8" "$ok"
 check "a long line of multi-byte characters: all of it delivered ($dashes of 8000)" "$([ $dashes -eq 8000 ] && echo 1 || echo 0)"
 
 # --- Release guard: every bundled rule is in the history the next version will check ---
-ok=1; for f in "$PLUGIN"/rules/*.md; do grep -qx "$(sha "$f")" "$PLUGIN/rules-history.txt" || ok=0; done
-check "release: every bundled rule's hash is in rules-history.txt" "$ok"
+ok=1; while IFS= read -r f; do grep -qxF "$(sha "$PLUGIN/rules/$f")  $f" "$PLUGIN/rules-history.txt" || ok=0; done < <(cd "$PLUGIN/rules" && find . -type f | sed 's#^\./##')
+check "release: every bundled rule (subfolders too) is in rules-history.txt" "$ok"
 
 echo
 echo "$pass passed, $fail failed"

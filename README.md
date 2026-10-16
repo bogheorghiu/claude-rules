@@ -22,6 +22,11 @@ A project that needs a sharper version keeps its own copy in its own
 
 Each plugin's README lists exactly what it runs, reads and writes.
 
+**If you used the older local install** (a clone in `~/.claude/rules/shared` with a
+`local-update.sh` SessionStart hook): it no longer works, because the rules moved. Delete
+`~/.claude/rules/shared`, remove that hook from `~/.claude/settings.json`, and install
+the plugin. Otherwise the rules load twice, or the hook fails at every start.
+
 **Claude desktop and claude.ai** don't run plugin hooks. Paste the rules you want into
 the app's personal-preferences field in Settings, and paste them again whenever a rule
 changes.
@@ -46,8 +51,8 @@ changes.
 - `bash plugins/shared-rules-custom-repo/hooks/sync-repo.test.sh`
 - `bash tests/shared-tail.test.sh`
 
-CI runs all three. `tests/live/` holds the end-to-end test through the real `claude`
-CLI. It spends tokens, so it runs by hand; its design and its rule for deciding a
-release are in `tests/live/PREREG.md`.
+CI runs all three. `tests/live/live.py` is the end-to-end test through the real
+`claude` CLI. It spends tokens, so it runs by hand. Its design, release rule and
+results are in `tests/live/PREREG-0.5.md`.
 
 Design and decisions: `docs/DESIGN-managed-rules.md`.

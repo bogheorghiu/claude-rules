@@ -165,8 +165,19 @@ printf '# TwoK\nTWOK_FRESH\n' > "$SRC4/rules/two-k.md"; commit "$SRC4" twok
 check "compact still runs the normal update after reprinting" "$(has "$(ks sessK compact)" TWOK_FRESH)"
 check "a new session after it: no rule bodies" "$([ "$(has "$(ks sessL)" ONE_BODY)" = 0 ] && echo 1 || echo 0)"
 
+# --- A folder of that name the add-on didn't make is moved aside, never emptied ---
+N="$TMP_DIR/n"; mkdir -p "$N/.claude/rules/shared-rules-custom-repo"; printf 'PRECIOUS\n' > "$N/.claude/rules/shared-rules-custom-repo/precious.md"
+o=$(start "$N" "file://$SRC4")
+bk=$(find "$N/.claude/shared-rules-backups" -name precious.md 2>/dev/null | head -1)
+check "foreign mirror folder: moved to a backup, then mirrored" "$([ -n "$bk" ] && [ "$(cat "$bk")" = PRECIOUS ] && [ "$(same_rules "$N" "$SRC4")" = 1 ] && [ "$(has "$o" 'moved to')" = 1 ] && echo 1 || echo 0)"
+
+# --- A change to non-rule files under rules/ announces no rules ---
+P="$TMP_DIR/p"; mkdir -p "$P"; start "$P" "file://$SRC4" >/dev/null; cmd "$P" "file://$SRC4" combine both >/dev/null
+printf 'notes\n' > "$SRC4/rules/notes.txt"; commit "$SRC4" notes
+check "only a non-.md file changed: no 'rules follow' announcement" "$([ "$(has "$(start "$P" "file://$SRC4")" 'follows')" = 0 ] && echo 1 || echo 0)"
+
 # --- Keep both, or replace the bundled shared-rules set ---
-L="$TMP_DIR/l"; mkdir -p "$L"
+L="$TMP_DIR/l"; mkdir -p "$L" "$L/shared-rules-custom-repo-claude-rules"   # beside shared-rules' data, as when installed
 printf '{"session_id":"b1"}' | env -i HOME="$L" PATH="$PATH" CLAUDE_PLUGIN_DATA="$L/bdata" bash "$BASE_HOOK" >/dev/null   # shared-rules installs its set
 start "$L" "file://$SRC4" >/dev/null
 cmd "$L" "file://$SRC4" combine replace "$L/bk" >/dev/null 2>&1; rc=$?

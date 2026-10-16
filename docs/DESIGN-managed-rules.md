@@ -32,8 +32,8 @@ not yet checked on macOS or in the desktop app.
    - **First install, folder already exists and isn't ours.** Claude asks the user to
      either use it, which backs up what is there and then installs (handled like an
      update), or install into `~/.claude/rules/shared-rules-plugin/` instead.
-   - **Ownership marker.** The folder carries `.shared-rules.json`. It records the
-     installed plugin version and the sha256 of every file the plugin wrote, which is
+   - **Ownership marker.** The folder carries `.shared-rules.manifest`, a text file. It records
+     the installed plugin version and the sha256 of every file the plugin wrote, which is
      how later runs know the folder is ours.
 2. **Session start.**
    - If the folder is current, the hook prints nothing, because Claude Code has already
@@ -51,7 +51,7 @@ not yet checked on macOS or in the desktop app.
      - **deleted:** the user removed a file the plugin wrote.
    - **Nice-to-have, included:** a file whose hash matches any version the plugin ever
      shipped counts as pristine, not modified. The plugin ships `rules-history.txt`,
-     listing the sha256 of every rule file across all releases.
+     listing `<sha256>  <path>` for every rule file across all releases.
    - **Consent gate.** Claude tells the user about the update and offers two choices:
      - **Keep yours:** nothing changes. The plugin keeps running the old rules and asks
        again at the next plugin version.
@@ -93,11 +93,11 @@ not yet checked on macOS or in the desktop app.
 
 ## Built (2026-10-16)
 
-- `plugins/shared-rules/hooks/sync-rules.sh`, 66 unit tests.
-- `plugins/shared-rules-custom-repo/hooks/sync-repo.sh`, 42 unit tests.
-- The renderer and slicing code after the "shared tail" marker is copied in both
+- `plugins/shared-rules/hooks/sync-rules.sh` and `plugins/shared-rules-custom-repo/hooks/sync-repo.sh`.
+  The test counts are whatever CI prints: a count written here goes stale.
+- The shared helpers block and the renderer/slicing code after the "shared tail" marker are copied in both
   plugins, because a plugin can't read files outside its own folder.
-  `tests/shared-tail.test.sh` keeps the two copies identical.
+  `tests/shared-tail.test.sh` keeps both copies identical.
 - Mutation checks were run: each core decision (history check, change detection, backup
   move, replace marker, re-print after compact, empty-render wait, ask gating, mirror
   deletion, both-or-replace question, canonical-repo guard) was broken on purpose, and at

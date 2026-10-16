@@ -73,7 +73,7 @@ tools `find`, `awk`, `sed`, `cp`, `mv` and `sha256sum` or `shasum`.
 - `~/.claude/shared-rules-backups/<date-time>/`: only when you choose to back up and
   update.
 - The plugin's data folder (`~/.claude/plugins/data/...`): the session's rendered output,
-  your choices, and a lock. Files older than a day are deleted.
+  your choices, and a lock. Session files are deleted after two days.
 
 **It deletes:** only files it installed itself and you haven't changed. It deletes
 nothing of yours: your edits and additions are moved, never removed.
@@ -82,7 +82,8 @@ nothing of yours: your edits and additions are moved, never removed.
 plugin.
 
 **Context cost:** about 12 KB on the first session and in fresh containers, then
-nothing.
+nothing. A `/compact` of the first session prints its rules again, because they never
+loaded natively in that session.
 
 **Where it works:** Claude Code, CLI and IDE. Cloud sessions get the rules each time,
 because each one starts with an empty home folder. Plugins don't run in claude.ai chat,
@@ -99,6 +100,12 @@ so it has no effect there.
   fresh.
 - **Uninstalling.** Uninstalling leaves your rules folder in place, since it's yours.
   Delete it by hand if you no longer want the rules.
+
+## If the add-on switched these rules off
+
+When you chose "only my own rules" with `shared-rules-custom-repo`, this plugin stands
+down. If the add-on is later uninstalled, the next session tells Claude how to switch
+the bundled rules back on, using the command `restore`.
 
 ## Your own rules repo
 

@@ -40,7 +40,9 @@ In its first session the add-on asks whether you want the bundled `shared-rules`
 ## Editing
 
 The folder is a mirror of your repo, so edit the repo, not the folder. A change made in
-the folder is overwritten by the next update from the repo.
+the folder is overwritten by the next update from the repo. If a folder of that name
+already exists and the add-on didn't make it, the add-on moves it to
+`~/.claude/shared-rules-backups/<date-time>/` before its first copy.
 
 ## What it runs, reads and writes
 
@@ -58,6 +60,11 @@ data is sent anywhere. Each network step is limited to 15 seconds.
   marker `~/.claude/rules/.shared-rules-replaced`.
 
 **Where it works:** Claude Code. Plugins don't run in claude.ai chat.
+
+**Limit in cloud sessions:** a cloud session starts with an empty home folder, so the
+add-on clones your repo fresh every time. Ask mode can't hold anything back there: each
+session loads whatever the repo holds at that moment. For the same reason, the
+both-or-only-yours question comes back in every cloud session.
 
 ## Troubleshooting
 
