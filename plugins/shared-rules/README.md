@@ -39,6 +39,19 @@ Rules with `paths:` frontmatter apply only to matching files. Claude Code handle
 natively. When the hook prints rules, it lists these with their paths instead of
 printing them in full.
 
+## Why a hook, and why six of them
+
+A Claude Code plugin can carry skills, agents, commands, hooks and MCP servers, but not
+rules. A plugin has no rules component, so this one ships its rules as files and uses a
+SessionStart hook to copy them into your rules folder, where Claude Code does load them.
+Rules are always-on guidance, and a skill loads only when Claude decides it's relevant, so
+a skill would not do the same job. If plugins could carry rules directly, this plugin would
+need no hook at all.
+
+The hook is registered six times because Claude Code passes each hook at most 10,000
+characters of output, and the first session prints the whole rule set, before the folder
+loads natively. Each of the six prints one slice. In later sessions all six print nothing.
+
 ## Install
 
 ```
