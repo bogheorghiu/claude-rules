@@ -9,7 +9,7 @@ NAME=shared-rules
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/hooks/$(basename "$0")"
 BUNDLED="$ROOT/rules"
-HISTORY="$ROOT/rules-history.txt"   # sha256 of every rule file any release shipped
+HISTORY="$ROOT/rules-history.txt"   # "<sha256>  <path>" of every rule file any release shipped
 DATA="${CLAUDE_PLUGIN_DATA:-$HOME/.cache/$NAME}"
 RULES_HOME="$HOME/.claude/rules"
 DEFAULT_TARGET="$RULES_HOME/shared-rules"
@@ -19,22 +19,26 @@ REPLACED="$RULES_HOME/.shared-rules-replaced"   # the user switched this plugin'
 VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
 SOURCE_LABEL="shared-rules $VERSION"
 
-sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-target() { local t; t=$(cat "$DATA/target" 2>/dev/null); printf '%s\n' "${t:-$DEFAULT_TARGET}"; }
-files_in() { [ -d "$1" ] && (cd "$1" && find . -type f ! -name "$MANIFEST" | sed 's#^\./##' | LC_ALL=C sort); }
+# Where the rules live: the user's recorded choice, else the alternate folder if it is
+# ours and the default isn't (a reset data folder must not lose the choice), else the default.
+target() {
+    local t; t=$(cat "$DATA/target" 2>/dev/null)
+    if [ -z "$t" ] && [ -f "$ALTERNATE_TARGET/$MANIFEST" ] && [ ! -f "$DEFAULT_TARGET/$MANIFEST" ]; then t="$ALTERNATE_TARGET"; fi
+    printf '%s\n' "${t:-$DEFAULT_TARGET}"
+}
 manifest_version() { sed -n 's/^version //p' "$1/$MANIFEST" 2>/dev/null | head -1; }
 manifest_files() { awk '$1 != "version" {print substr($0, 67)}' "$1/$MANIFEST" 2>/dev/null; }
 manifest_hash() { awk -v f="$2" '$1 != "version" && substr($0, 67) == f {print $1; exit}' "$1/$MANIFEST" 2>/dev/null; }
 
 # What the user changed in a folder this plugin wrote: lines "edited <f>", "added <f>",
-# "deleted <f>". A file matching what the plugin wrote, or any rule a release ever
-# shipped, is the plugin's own and safe to replace.
+# "deleted <f>". A file matching what the plugin wrote, or what any release shipped
+# under that same name, is the plugin's own and safe to replace.
 changes() {
     local dir="$1" f h m
     while IFS= read -r f; do
         h=$(sha "$dir/$f"); m=$(manifest_hash "$dir" "$f")
         [ -n "$m" ] && [ "$h" = "$m" ] && continue
-        grep -qx "$h" "$HISTORY" 2>/dev/null && continue
+        grep -qxF "$h  $f" "$HISTORY" 2>/dev/null && continue
         if [ -n "$m" ]; then echo "edited $f"; else echo "added $f"; fi
     done < <(files_in "$dir")
     manifest_files "$dir" | while IFS= read -r f; do [ -e "$dir/$f" ] || echo "deleted $f"; done
@@ -56,22 +60,32 @@ install_into() {
     while IFS= read -r f; do printf '%s  %s\n' "$(sha "$dir/$f")" "$f"; done < <(files_in "$dir") > "$before"
     while IFS= read -r f; do rm -f "${dir:?}/${f:?}"; done < <(files_in "$dir")
     find "$dir" -mindepth 1 -type d -empty -delete 2>/dev/null
-    (cd "$BUNDLED" && find . -type f | sed 's#^\./##') | while IFS= read -r f; do
-        mkdir -p "$dir/$(dirname "$f")" && cp "$BUNDLED/$f" "$dir/$f"
-    done
-    { echo "version $VERSION"; while IFS= read -r f; do printf '%s  %s\n' "$(sha "$dir/$f")" "$f"; done < <(files_in "$dir"); } > "$dir/$MANIFEST"
+    local ok=1
+    while IFS= read -r f; do
+        mkdir -p "$dir/$(dirname "$f")" && cp "$BUNDLED/$f" "$dir/$f" || ok=""
+    done < <(cd "$BUNDLED" && find . -type f | sed 's#^\./##')
+    { echo "version $VERSION"; while IFS= read -r f; do printf '%s  %s\n' "$(sha "$dir/$f")" "$f"; done < <(files_in "$dir"); } > "$dir/$MANIFEST" || ok=""
     while IFS= read -r f; do grep -qxF "$(sha "$dir/$f")  $f" "$before" || echo "$f"; done < <(files_in "$dir")
     rm -f "${before:?}"
+    [ -n "$ok" ]
 }
 
+# ==== shared helpers: kept identical in both plugins (tests/shared-tail.test.sh checks) ====
+sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+# Files and symlinks, never directories: a symlink is moved or replaced, never written through.
+files_in() { [ -d "$1" ] && (cd "$1" && find . ! -type d ! -name "$MANIFEST" | sed 's#^\./##' | LC_ALL=C sort); }
+cmd_prefix() { printf 'CLAUDE_PLUGIN_DATA=%q bash %q' "${CLAUDE_PLUGIN_DATA:-}" "$SELF"; }
+new_backup() { printf '%s\n' "$HOME/.claude/shared-rules-backups/$(date +%Y%m%d-%H%M%S)"; }
+remember() { [ -n "${sid:-}" ] && [ $# -gt 0 ] && printf '%s\n' "$@" > "$DATA/printed-$sid"; }
+# One fetch, install or decision at a time. A lock older than 2 minutes was left by a
+# killed run, so it never blocks the user's decision for long.
 lock() {
     mkdir -p "$DATA"
+    find "$DATA/cache.lock" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null
     for _ in $(seq 1 100); do mkdir "$DATA/cache.lock" 2>/dev/null && return 0; sleep 0.2; done; return 1
 }
 unlock() { rmdir "$DATA/cache.lock" 2>/dev/null; }
-cmd_prefix() { printf 'CLAUDE_PLUGIN_DATA=%q bash %q' "${CLAUDE_PLUGIN_DATA:-}" "$SELF"; }
-remember() { [ -n "$sid" ] && [ $# -gt 0 ] && printf '%s\n' "$@" > "$DATA/printed-$sid"; }
-new_backup() { printf '%s\n' "$HOME/.claude/shared-rules-backups/$(date +%Y%m%d-%H%M%S)"; }
+# ==== end shared helpers ====
 
 # --- Commands Claude runs once the user decides (the session-start notice names them) ---
 case "${1:-}" in
@@ -85,7 +99,7 @@ apply)   # apply <version> [backup-folder]: back up the user's changes, install 
         echo "[$NAME] Installed version $VERSION into $t. It loads from the next session on."
         exit 0
     fi
-    unlock; echo "[$NAME] Could not update $t. Nothing was deleted; check $b for files already moved." >&2; exit 1 ;;
+    unlock; echo "[$NAME] Could not finish installing into $t (disk full or not writable?). Any changed files already moved are in $b. Fix the cause and run the same command again." >&2; exit 1 ;;
 keep)    # keep <version>: decline this version's rule changes entirely
     [ "${2:-}" = "$VERSION" ] || { echo "[$NAME] Version ${2:-?} is not the installed plugin version $VERSION." >&2; exit 1; }
     mkdir -p "$DATA" && echo "$VERSION" > "$DATA/declined"
@@ -104,23 +118,37 @@ choose)  # choose here|elsewhere [backup-folder]: first install found a folder o
         if [ -e "$ALTERNATE_TARGET" ] && [ ! -f "$ALTERNATE_TARGET/$MANIFEST" ]; then
             unlock; echo "[$NAME] $ALTERNATE_TARGET exists too and isn't this plugin's. Rename one of them, then start a new session." >&2; exit 1
         fi
-        install_into "$ALTERNATE_TARGET" "" >/dev/null || { unlock; exit 1; }
+        b="${3:-$(new_backup)}"   # the folder may already be ours, with the user's edits in it
+        install_into "$ALTERNATE_TARGET" "$b" >/dev/null || { unlock; echo "[$NAME] Could not install into $ALTERNATE_TARGET." >&2; exit 1; }
+        [ -d "$b" ] && echo "[$NAME] Changed files from $ALTERNATE_TARGET are in $b."
         echo "$ALTERNATE_TARGET" > "$DATA/target"; unlock
         echo "[$NAME] Installed into $ALTERNATE_TARGET. The rules load from the next session on." ;;
     *) unlock; echo "usage: choose here|elsewhere [backup-folder]" >&2; exit 1 ;;
     esac
     exit 0 ;;
+restore)   # switch the bundled set back on after shared-rules-custom-repo replaced it
+    rm -f "${REPLACED:?}"
+    echo "[$NAME] The bundled rules are switched back on; they install at the next session start."
+    exit 0 ;;
 esac
 
 # --- Session start: decide what this session needs printed ---
 render() {
-    [ -e "$REPLACED" ] && return   # the user replaced these rules with their own set
+    if [ -e "$REPLACED" ]; then   # the user replaced these rules with their own set
+        # The add-on that set the marker keeps a data folder beside ours; without it the
+        # marker is orphaned and would silence this plugin with no way back in sight.
+        if ! compgen -G "${DATA%/*}/shared-rules-custom-repo*" >/dev/null; then
+            echo "[$NAME] The bundled rules are switched off: shared-rules-custom-repo replaced them, but it no longer seems installed. To switch them back on, run:"
+            echo "    $(cmd_prefix) restore"
+        fi
+        return
+    fi
     local t old ch gone new=() all=()
     t=$(target)
-    # A later start of a session that had rules printed rather than loaded (a /compact
-    # or resume of it) needs them printed again: native loading happened before they
-    # existed. Remembered per session id.
-    if { [ "$src" = compact ] || [ "$src" = resume ]; } && [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ] && [ -f "$t/$MANIFEST" ]; then
+    # A /compact of a session that had rules printed rather than loaded needs them
+    # printed again: its native load happened before they existed. (A resume starts a new
+    # process, which loads the folder natively, so it needs nothing.)
+    if [ "$src" = compact ] && [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ] && [ -f "$t/$MANIFEST" ]; then
         while IFS= read -r f; do [ -e "$t/$f" ] && new+=("$f"); done < "$DATA/printed-$sid"
         echo "[$NAME] Rules installed earlier in this session, printed again because they load natively only from the next session:"
         print_rules "$t" "${new[@]}"
@@ -144,6 +172,12 @@ render() {
         echo "Until then, this session's copy of the plugin's rules follows."
         while IFS= read -r f; do all+=("$f"); done < <(files_in "$BUNDLED")
         print_rules "$BUNDLED" "${all[@]}"
+    elif [ "$t/$MANIFEST" -nt "$STAMP" ]; then
+        # Another session started at the same moment wrote the folder while this one
+        # waited for the lock: this session's native load came too early to see it.
+        while IFS= read -r f; do all+=("$f"); done < <(files_in "$t")
+        echo "[$NAME] Rules were installed or updated in $t while this session was starting; this session's copy follows."
+        print_rules "$t" "${all[@]}"
     elif [ "$(manifest_version "$t")" != "$VERSION" ]; then
         old=$(manifest_version "$t"); ch=$(changes "$t")
         if [ -z "$ch" ]; then
@@ -227,18 +261,23 @@ sid=$(field session_id)
 # whose earlier context may hold printed rules; a session id alone can repeat (a
 # `claude -p` run inside another session inherits its parent's id).
 src=$(field source)
-RENDER="$DATA/render-${sid:-$$}.txt"
-find "$DATA" -maxdepth 1 \( -name 'render-*' -o -name 'printed-*' \) -mtime +1 -exec rm -f {} + 2>/dev/null
+# The render is per Claude process too: every hook of one start shares it as their
+# grandparent (each hook runs under its own shell), and parallel `claude -p` runs that
+# inherited one session id don't share it.
+claude_pid=$( (cat "/proc/$PPID/stat" 2>/dev/null | awk '{print $4}') || true)
+[ -n "$claude_pid" ] || claude_pid=$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')
+RENDER="$DATA/render-${sid:-x}-${claude_pid:-$$}.txt"
 if [ "$PART" = 1 ]; then
-    # Sessions starting together share one rules folder: one render at a time.
-    LOCK="$DATA/cache.lock"
-    find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
-    locked=""
+    find "$DATA" -maxdepth 1 \( -name 'render-*' -o -name 'printed-*' -o -name 'start-*' \) -mtime +1 -exec rm -f {} + 2>/dev/null
+    # Marks when this start began, before waiting: a folder written after it was written
+    # while this session waited, too late for its native load.
+    STAMP="$DATA/start-$$"; : > "$STAMP"
     # ~20 s: with a 15 s network step after it, slice 1 stays inside the 45 s hook timeout.
-    for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
-    ( render ) > "$RENDER.tmp.$$" 2>/dev/null
     # Rendering after a timed-out wait goes ahead, but the lock is another run's to release.
-    [ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
+    locked=""; lock && locked=1
+    ( render ) > "$RENDER.tmp.$$" 2>/dev/null
+    [ -n "$locked" ] && unlock
+    rm -f "${STAMP:?}"
     echo "$started" > "$RENDER.ts.tmp.$$"
     mv "$RENDER.tmp.$$" "$RENDER" && mv "$RENDER.ts.tmp.$$" "$RENDER.ts"
 else

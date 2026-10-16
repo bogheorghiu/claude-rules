@@ -40,16 +40,22 @@ git_net() {
     command -v timeout >/dev/null 2>&1 && t=(timeout 15)
     "${t[@]}" git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 "$@" >/dev/null 2>&1
 }
+# ==== shared helpers: kept identical in both plugins (tests/shared-tail.test.sh checks) ====
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-files_in() { [ -d "$1" ] && (cd "$1" && find . -type f ! -name "$MANIFEST" | sed 's#^\./##' | LC_ALL=C sort); }
+# Files and symlinks, never directories: a symlink is moved or replaced, never written through.
+files_in() { [ -d "$1" ] && (cd "$1" && find . ! -type d ! -name "$MANIFEST" | sed 's#^\./##' | LC_ALL=C sort); }
 cmd_prefix() { printf 'CLAUDE_PLUGIN_DATA=%q bash %q' "${CLAUDE_PLUGIN_DATA:-}" "$SELF"; }
 new_backup() { printf '%s\n' "$HOME/.claude/shared-rules-backups/$(date +%Y%m%d-%H%M%S)"; }
 remember() { [ -n "${sid:-}" ] && [ $# -gt 0 ] && printf '%s\n' "$@" > "$DATA/printed-$sid"; }
+# One fetch, install or decision at a time. A lock older than 2 minutes was left by a
+# killed run, so it never blocks the user's decision for long.
 lock() {
     mkdir -p "$DATA"
+    find "$DATA/cache.lock" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null
     for _ in $(seq 1 100); do mkdir "$DATA/cache.lock" 2>/dev/null && return 0; sleep 0.2; done; return 1
 }
 unlock() { rmdir "$DATA/cache.lock" 2>/dev/null; }
+# ==== end shared helpers ====
 
 # Make $TARGET an exact copy of the cache's rules/ folder at its checked-out commit.
 # Prints the paths that are new or different, for this session to read.
@@ -84,7 +90,7 @@ combine)   # combine both|replace [backup-folder]: alongside the bundled shared-
     case "${2:-}" in
     both)
         rm -f "${REPLACED:?}"; echo both > "$DATA/combine"
-        echo "[$NAME] Both rule sets stay: the bundled shared-rules set and the rules from $SHOWN_URL. The bundled set comes back from the next session on if it was replaced." ;;
+        echo "[$NAME] Both rule sets stay: the bundled shared-rules set and your repo's rules. If the bundled set was replaced, it comes back from the next session on." ;;
     replace)
         b="${3:-$(new_backup)}"
         for d in "$RULES_HOME/shared-rules" "$RULES_HOME/shared-rules-plugin"; do
@@ -94,7 +100,7 @@ combine)   # combine both|replace [backup-folder]: alongside the bundled shared-
             fi
         done
         mkdir -p "$RULES_HOME" && touch "$REPLACED" && echo replace > "$DATA/combine"
-        echo "[$NAME] From the next session on, only the rules from $SHOWN_URL load. To bring the bundled set back: $(cmd_prefix) combine both" ;;
+        echo "[$NAME] From the next session on, only your repo's rules load. To bring the bundled set back: $(cmd_prefix) combine both" ;;
     *) echo "usage: combine both|replace [backup-folder]" >&2; exit 1 ;;
     esac
     exit 0 ;;
@@ -111,8 +117,9 @@ render() {
         echo "[$NAME] rules_repo points at the shared-rules repo itself, whose rules the shared-rules plugin already installs. Nothing extra was loaded; set rules_repo to your own repo."
         return
     fi
-    # Later start of a session whose rules were printed rather than loaded (/compact, resume).
-    if { [ "$src" = compact ] || [ "$src" = resume ]; } && [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ]; then
+    # A /compact of a session whose rules were printed rather than loaded (a resume is a
+    # new process and loads the folder natively).
+    if [ "$src" = compact ] && [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ]; then
         while IFS= read -r f; do [ -e "$TARGET/$f" ] && new+=("$f"); done < "$DATA/printed-$sid"
         echo "[$NAME] Rules installed earlier in this session, printed again because they load natively only from the next session:"
         print_rules "$TARGET" "${new[@]}"
@@ -161,8 +168,19 @@ render() {
         echo "[$NAME] No custom rules loaded this session: could not fetch $SHOWN_URL and nothing is cached."
         return
     fi
+    if [ "$(mirrored)" = "$(git -C "$CACHE" rev-parse HEAD 2>/dev/null)" ] && [ "$TARGET/$MANIFEST" -nt "$STAMP" ]; then
+        # Another session started at the same moment mirrored while this one waited for
+        # the lock: this session's native load came too early to see it.
+        while IFS= read -r f; do case "$f" in *.md) new+=("$f") ;; esac; done < <(files_in "$TARGET")
+    fi
+    if [ -e "$TARGET" ] && [ ! -f "$TARGET/$MANIFEST" ] && [ -n "$(files_in "$TARGET")" ]; then
+        # A folder of that name the add-on didn't make: never empty it, move it aside.
+        local b; b=$(new_backup)
+        mkdir -p "$b" && mv "$TARGET" "$b/" || { echo "[$NAME] $TARGET exists and isn't this add-on's; it could not be moved aside, so nothing was loaded."; return; }
+        echo "[$NAME] $TARGET existed and wasn't made by this add-on; it was moved to $b/."
+    fi
     if [ "$(mirrored)" != "$(git -C "$CACHE" rev-parse HEAD 2>/dev/null)" ]; then
-        while IFS= read -r f; do new+=("$f"); done < <(mirror)
+        while IFS= read -r f; do case "$f" in *.md) new+=("$f") ;; esac; done < <(mirror)
         if [ ${#new[@]} -eq 0 ] && [ -z "$(files_in "$TARGET")" ]; then
             echo "[$NAME] $SHOWN_URL has no files under rules/, so no custom rules were loaded."
         elif [ ${#new[@]} -gt 0 ]; then
@@ -245,18 +263,23 @@ sid=$(field session_id)
 # whose earlier context may hold printed rules; a session id alone can repeat (a
 # `claude -p` run inside another session inherits its parent's id).
 src=$(field source)
-RENDER="$DATA/render-${sid:-$$}.txt"
-find "$DATA" -maxdepth 1 \( -name 'render-*' -o -name 'printed-*' \) -mtime +1 -exec rm -f {} + 2>/dev/null
+# The render is per Claude process too: every hook of one start shares it as their
+# grandparent (each hook runs under its own shell), and parallel `claude -p` runs that
+# inherited one session id don't share it.
+claude_pid=$( (cat "/proc/$PPID/stat" 2>/dev/null | awk '{print $4}') || true)
+[ -n "$claude_pid" ] || claude_pid=$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')
+RENDER="$DATA/render-${sid:-x}-${claude_pid:-$$}.txt"
 if [ "$PART" = 1 ]; then
-    # Sessions starting together share one rules folder: one render at a time.
-    LOCK="$DATA/cache.lock"
-    find "$LOCK" -maxdepth 0 -mmin +2 -exec rmdir {} \; 2>/dev/null   # left by a killed run
-    locked=""
+    find "$DATA" -maxdepth 1 \( -name 'render-*' -o -name 'printed-*' -o -name 'start-*' \) -mtime +1 -exec rm -f {} + 2>/dev/null
+    # Marks when this start began, before waiting: a folder written after it was written
+    # while this session waited, too late for its native load.
+    STAMP="$DATA/start-$$"; : > "$STAMP"
     # ~20 s: with a 15 s network step after it, slice 1 stays inside the 45 s hook timeout.
-    for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 0.2; done
-    ( render ) > "$RENDER.tmp.$$" 2>/dev/null
     # Rendering after a timed-out wait goes ahead, but the lock is another run's to release.
-    [ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
+    locked=""; lock && locked=1
+    ( render ) > "$RENDER.tmp.$$" 2>/dev/null
+    [ -n "$locked" ] && unlock
+    rm -f "${STAMP:?}"
     echo "$started" > "$RENDER.ts.tmp.$$"
     mv "$RENDER.tmp.$$" "$RENDER" && mv "$RENDER.ts.tmp.$$" "$RENDER.ts"
 else
