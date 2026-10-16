@@ -5,32 +5,32 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 1 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-1.sh\"",
             "timeout": 45
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 2 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-2.sh\"",
             "timeout": 45
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 3 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-3.sh\"",
             "timeout": 45
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 4 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-4.sh\"",
             "timeout": 45
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 5 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-5.sh\"",
             "timeout": 45
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-rules.sh\" part 6 6",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/part-6.sh\"",
             "timeout": 45
           }
         ]
