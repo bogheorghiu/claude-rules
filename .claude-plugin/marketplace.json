@@ -9,10 +9,6 @@
     {
       "name": "shared-rules",
       "source": "./plugins/shared-rules"
-    },
-    {
-      "name": "shared-rules-custom-repo",
-      "source": "./plugins/shared-rules-custom-repo"
     }
   ]
 }
