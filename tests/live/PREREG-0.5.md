@@ -141,3 +141,28 @@ renderer changed. The ship rule is unchanged. The run 1 results above stay on re
 **Decision under the ship rule:** the 0.5 build goes forward to the operator's hands-on
 test. What this test cannot see is listed above. The largest gap is the real
 update-fetch path; the operator's own update test covers it.
+
+### Deviation 2, 2026-10-16, after run 2 and before run 3
+
+A local `/code-review` of the branch (high effort) found real defects. They are fixed in
+commits `47c0491` and the one after it, and each fix has a mutation-checked unit test.
+
+**Defects fixed:**
+- Data loss on the `choose elsewhere` path.
+- Data loss when the add-on hit a folder it didn't make.
+- Symlinks were written through.
+- A user file with shipped text under another name was deleted instead of backed up.
+- Two sessions starting together on a fresh machine: the second got no rules.
+- Renders mixed when processes shared a session id.
+- A resume printed the rules twice.
+- An orphaned "replaced" marker silenced the plugin.
+- A failed copy reported success.
+
+**One deliberate behaviour change:** the hook prints rules again only on `compact`, no
+longer on `resume`. A resume starts a new process, which loads the folder natively.
+
+**Not covered live:** none of the scenarios below exercises `resume` or `compact`. The
+change is covered by unit tests only.
+
+**What gets rerun:** the whole suite, unchanged, as run 3. The scripts changed, so run 2's
+result no longer certifies the build. The ship rule is unchanged.
