@@ -23,7 +23,8 @@ At the start of each session, a hook runs that does three things:
    - If you haven't changed the folder, the hook replaces its rules with the new
      version's, then tells Claude what changed and which rules no longer apply.
    - If you have edited, added or deleted files in the folder, it changes nothing and
-     Claude asks you to choose:
+     Claude asks you to choose. Claude Code never speaks first, so the question comes
+     with Claude's reply to your first message in that session, whatever it is:
      - **Back up and update.** Your edited and added files move to a backup folder
        (by default `~/.claude/shared-rules-backups/<date-time>/`, or one you name),
        then the new version's rules are installed exactly.
@@ -95,6 +96,8 @@ so it has no effect there.
 - **No rules in a new session after installing.** The first session gets them from the
   hook's output. Check that `~/.claude/rules/shared-rules/` exists. Run `/memory`; the
   rule files should be listed.
+- **An update was installed but Claude said nothing.** Send any message; the question
+  comes with the reply. Claude Code never speaks before your first message.
 - **An update keeps asking.** It asks until you choose. "Keep yours" stops the questions
   until the next version.
 - **Start over.** Delete `~/.claude/rules/shared-rules/`. The next session installs
