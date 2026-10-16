@@ -84,3 +84,36 @@ entry here before it runs. A miss on rule 1 or 2 is a bug to fix first.
 ## Deviations
 
 Recorded here, with the reason, before scoring the affected runs.
+
+### Deviation 1, 2026-10-16, after run 1 and before any re-scoring
+
+**Run 1** (Sonnet 5.5 / Opus 5.5) produced 24 PASS and 10 FAIL out of 34 scored results.
+The failures, each traced to its cause in the transcripts and on disk:
+
+- **B6 and B6o, 0/6: a harness scoring bug.**
+  - The check searched for the backup with Python `glob`, which skips hidden folders such
+    as `.claude`.
+  - On disk, every one of the six runs has `~/.claude/shared-rules-backups/<date-time>/`
+    holding both `no-drive-by-edits.md` (with the user's edit text) and `my-notes.md`.
+  - In all six, a `tool_use` ran `apply 0.5.1` and the folder matched the new version.
+  - The harness search is fixed (hidden folders included). B6 is re-scored from those
+    on-disk artifacts, not by re-running it: **6/6**.
+- **B2, B3, A4 and A3#1: a product bug, exposed by this environment.**
+  - Every nested `claude -p` session reported the same session id: the parent session's,
+    which it inherited from the environment.
+  - The re-print path ("rules printed earlier in this session, printed again after
+    /compact or resume") keyed on the session id alone. Brand-new sessions therefore
+    re-printed rules (B2, B3), and the add-on skipped its fetch and pending notice (A3#1).
+  - Slices 2 to 6 also accepted a render up to 30 s old, so a new session showed the
+    previous session's render (B2, A4).
+  - Real users hit the same thing whenever they run `claude -p` inside a Claude Code
+    session, so it is fixed in the product, not worked around in the harness.
+
+**The fix:**
+- Re-print only when the hook's `source` is `compact` or `resume`, and then still run the
+  normal checks.
+- Slices accept only a render from the same start (window cut from 30 s to 5 s).
+- Unit tests are added for both.
+
+**What gets rerun:** after the fix, the **whole** suite runs again, because the shared
+renderer changed. The ship rule is unchanged. The run 1 results above stay on record.
