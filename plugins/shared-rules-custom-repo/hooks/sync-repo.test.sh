@@ -156,10 +156,13 @@ fi
 
 # --- A later start of the session that printed the rules (/compact, resume) prints them again ---
 K="$TMP_DIR/k"; mkdir -p "$K"
-ks() { printf '{"session_id":"%s"}' "$1" | env -i HOME="$K" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+ks() { printf '{"session_id":"%s","source":"%s"}' "$1" "${2:-startup}" | env -i HOME="$K" PATH="$PATH" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
     CLAUDE_PLUGIN_DATA="$K/data" CLAUDE_PLUGIN_OPTION_RULES_REPO="file://$SRC4" CLAUDE_PLUGIN_OPTION_UPDATE_MODE=auto bash "$HOOK"; }
 ks sessK >/dev/null
-check "compact/resume of the installing session: rules printed again" "$(has "$(ks sessK)" ONE_BODY)"
+check "compact of the installing session: rules printed again" "$(has "$(ks sessK compact)" ONE_BODY)"
+check "a new startup reusing that session id: no reprint" "$([ "$(has "$(ks sessK startup)" ONE_BODY)" = 0 ] && echo 1 || echo 0)"
+printf '# TwoK\nTWOK_FRESH\n' > "$SRC4/rules/two-k.md"; commit "$SRC4" twok
+check "compact still runs the normal update after reprinting" "$(has "$(ks sessK compact)" TWOK_FRESH)"
 check "a new session after it: no rule bodies" "$([ "$(has "$(ks sessL)" ONE_BODY)" = 0 ] && echo 1 || echo 0)"
 
 # --- Keep both, or replace the bundled shared-rules set ---

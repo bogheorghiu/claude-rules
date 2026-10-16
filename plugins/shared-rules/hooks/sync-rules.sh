@@ -120,11 +120,11 @@ render() {
     # A later start of a session that had rules printed rather than loaded (a /compact
     # or resume of it) needs them printed again: native loading happened before they
     # existed. Remembered per session id.
-    if [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ] && [ -f "$t/$MANIFEST" ] && [ "$(manifest_version "$t")" = "$VERSION" ]; then
+    if { [ "$src" = compact ] || [ "$src" = resume ]; } && [ -n "$sid" ] && [ -s "$DATA/printed-$sid" ] && [ -f "$t/$MANIFEST" ]; then
         while IFS= read -r f; do [ -e "$t/$f" ] && new+=("$f"); done < "$DATA/printed-$sid"
         echo "[$NAME] Rules installed earlier in this session, printed again because they load natively only from the next session:"
         print_rules "$t" "${new[@]}"
-        return
+        new=()
     fi
     if [ ! -e "$t" ]; then
         # First install, or a fresh container: nothing is loaded natively yet.
@@ -216,11 +216,17 @@ LIMIT=9000   # under 10,000, leaving room for the wrapper lines
 
 # Render once per session start, so every slice comes from the same version. Only
 # slice 1 renders; the others wait for its render, so no two slices ever touch the
-# rules folder at once. A render counts only if it began within this start (a later
-# /compact or resume fires SessionStart again with the same session id).
+# rules folder at once. A render counts only if it began within this start: all slices
+# are launched together, and a later start can reuse the session id.
 mkdir -p "$DATA" 2>/dev/null
 started=$(date +%s)
-sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9_-')
+input=$(cat 2>/dev/null)
+field() { printf '%s' "$input" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\\1/p" | head -1 | tr -cd 'A-Za-z0-9_-'; }
+sid=$(field session_id)
+# startup, resume, clear or compact. Only resume and compact continue a conversation
+# whose earlier context may hold printed rules; a session id alone can repeat (a
+# `claude -p` run inside another session inherits its parent's id).
+src=$(field source)
 RENDER="$DATA/render-${sid:-$$}.txt"
 find "$DATA" -maxdepth 1 \( -name 'render-*' -o -name 'printed-*' \) -mtime +1 -exec rm -f {} + 2>/dev/null
 if [ "$PART" = 1 ]; then
@@ -239,7 +245,7 @@ else
     [ -n "$sid" ] || exit 0
     for _ in $(seq 1 210); do   # ~42 s, inside the 45 s hook timeout
         ts=$(cat "$RENDER.ts" 2>/dev/null)
-        [ -n "$ts" ] && [ "$ts" -ge $((started - 30)) ] && [ -e "$RENDER" ] && break
+        [ -n "$ts" ] && [ "$ts" -ge $((started - 5)) ] && [ -e "$RENDER" ] && break
         ts=""; sleep 0.2
     done
     if [ -z "$ts" ]; then

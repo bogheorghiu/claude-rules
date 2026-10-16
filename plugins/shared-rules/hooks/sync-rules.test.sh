@@ -162,13 +162,15 @@ check "replaced: installs nothing" "$([ ! -e "$(T "$G")" ] && echo 1 || echo 0)"
 
 # --- A later start of the installing session (/compact, resume) prints the rules again ---
 K="$TMP_DIR/k"; mkdir -p "$K"
-ks() { printf '{"session_id":"%s"}' "$2" | env -i HOME="$K" PATH="$PATH" CLAUDE_PLUGIN_DATA="$K/data" bash "$1/hooks/sync-rules.sh" part 1 1; }
+ks() { printf '{"session_id":"%s","source":"%s"}' "$2" "${3:-startup}" | env -i HOME="$K" PATH="$PATH" CLAUDE_PLUGIN_DATA="$K/data" bash "$1/hooks/sync-rules.sh" part 1 1; }
 ks "$V1" sessK >/dev/null
-check "compact/resume of the installing session: rules printed again" "$(has "$(ks "$V1" sessK)" KEEP_V1)"
+check "compact of the installing session: rules printed again" "$(has "$(ks "$V1" sessK compact)" KEEP_V1)"
+check "resume of the installing session: rules printed again" "$(has "$(ks "$V1" sessK resume)" KEEP_V1)"
+check "a new startup reusing that session id (claude -p inside a session): prints nothing" "$([ -z "$(ks "$V1" sessK startup)" ] && echo 1 || echo 0)"
 check "a new session after it: prints nothing" "$([ -z "$(ks "$V1" sessL)" ] && echo 1 || echo 0)"
 ks "$V2" sessM >/dev/null
-o=$(ks "$V2" sessM)
-check "compact/resume of an updating session: only the changed rules printed again" "$([ "$(has "$o" CHANGE_V2)" = 1 ] && [ "$(has "$o" KEEP_V1)" = 0 ] && echo 1 || echo 0)"
+o=$(ks "$V2" sessM compact)
+check "compact of an updating session: only the changed rules printed again" "$([ "$(has "$o" CHANGE_V2)" = 1 ] && [ "$(has "$o" KEEP_V1)" = 0 ] && echo 1 || echo 0)"
 
 # --- Rule formats ---
 make_plugin "$TMP_DIR/fmt" 0.1.0 <<'EOF'
@@ -201,6 +203,11 @@ check "slicing: six parallel slices still carry every rule exactly once" "$ok"
 # A silent session must not keep the other slices waiting out their timeout.
 t0=$(date +%s); part "$H12" sessQ 1 6 >/dev/null; part "$H12" sessQ 2 6 >/dev/null
 check "silent session: other slices return at once" "$([ $(( $(date +%s) - t0 )) -lt 5 ] && echo 1 || echo 0)"
+# A later start reusing the session id: a slice that runs before slice 1 has rendered
+# must wait for this start's render, not print the previous start's.
+H16="$TMP_DIR/h16"; mkdir -p "$H16"; part "$H16" sessR 1 6 >/dev/null; sleep 6
+part "$H16" sessR 2 6 > "$TMP_DIR/early2.out" & sleep 1; part "$H16" sessR 1 6 >/dev/null; wait
+check "a slice never prints a previous start's render" "$([ "$(has "$(cat "$TMP_DIR/early2.out")" BIGMARK_)" = 0 ] && echo 1 || echo 0)"
 H13="$TMP_DIR/h13"; mkdir -p "$H13"; o1=$(part "$H13" sessO 1 2); o=$(part "$H13" sessO 2 2)
 check "overflow: last hook says more rules did not fit, and where to read" "$([ "$(has "$o" 'did not fit')" = 1 ] && [ "$(has "$o" "$H13/data/render-sessO.txt")" = 1 ] && echo 1 || echo 0)"
 ln=$(printf '%s' "$o" | sed -n 's/.* from line \([0-9]*\) to the end.*/\1/p')
