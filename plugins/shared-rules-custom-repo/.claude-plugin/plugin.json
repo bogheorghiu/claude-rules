@@ -1,21 +1,27 @@
 {
-  "name": "shared-rules",
-  "description": "Shared Claude rules for every session - loads a set of rules into context at session start: the rules bundled with each plugin version by default, or your own rules repo with updates applied automatically or only after you approve them.",
+  "name": "shared-rules-custom-repo",
+  "version": "0.5.0",
+  "description": "Add-on to shared-rules: loads the rules from a git repo you choose into ~/.claude/rules/shared-rules-custom-repo/, next to or instead of the bundled set. New and changed rules apply at once, or only after you approve them.",
   "author": {
-    "name": "bogheorghiu"
+    "name": "bogheorghiu",
+    "url": "https://github.com/bogheorghiu"
   },
+  "homepage": "https://github.com/bogheorghiu/claude-rules",
+  "repository": "https://github.com/bogheorghiu/claude-rules",
   "license": "MIT",
+  "dependencies": ["shared-rules"],
   "userConfig": {
     "rules_repo": {
       "type": "string",
       "title": "Rules repository",
-      "description": "Git URL of your own rules repo (its rules/ folder is loaded). Leave empty to use the rules bundled with this plugin.",
-      "default": ""
+      "description": "Git URL of your rules repo. Its rules/ folder is loaded. Public repos, or private ones your git credentials can already read; do not put a token in the URL.",
+      "required": true
     },
     "update_mode": {
       "type": "string",
       "title": "Rule updates",
-      "description": "For your own rules repo. ask: new or changed rules wait until you approve them in a session. auto: they load as soon as they are published.",
+      "description": "ask: new or changed rules wait until you approve them in a session. auto: they load as soon as they are published.",
+      "options": ["ask", "auto"],
       "default": "ask"
     }
   }
