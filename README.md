@@ -2,7 +2,8 @@
 
 A shared set of Claude rules, plus the plugins that install them into your own
 `~/.claude/rules/` folder. Claude Code then loads the rules natively in every project
-and every session.
+and every session. They are installed by a session-start hook because a Claude Code
+plugin can't carry rules itself; the plugin's README explains how.
 
 The rules are portable cores: each states a general discipline and the reasons for it.
 A project that needs a sharper version keeps its own copy in its own
