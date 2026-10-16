@@ -82,15 +82,27 @@ not yet checked on macOS or in the desktop app.
 - Pointing the add-on at this repo itself makes it say so and stop. The base plugin
   already has those rules.
 
-## What this retires
+## What this retires, and what it keeps
 
-- **The separate local install** (`git clone` into `~/.claude/rules/shared` plus
-  `local-update.sh`). The base plugin now places the rules in the same kind of folder,
-  and the add-on covers "my own repo".
-- **Slicing the output across six hooks.** Printing happens only when files are written,
-  and on a local machine that is once per update. Cloud sessions still print the whole
-  set every session, so the size limit still matters there. Slicing stays, but only for
-  that path.
+- **Retired:** the separate local install (`git clone` into `~/.claude/rules/shared` plus
+  `local-update.sh`). The base plugin now maintains a folder of the same kind, and the
+  add-on covers "my own repo".
+- **Kept:** slicing output across six hooks. It still matters on the sessions that
+  print: the first install, fresh cloud containers, and a `/compact` or resume of those
+  sessions, which prints the same files again because they were never loaded natively.
+
+## Built (2026-10-16)
+
+- `plugins/shared-rules/hooks/sync-rules.sh`, 66 unit tests.
+- `plugins/shared-rules-custom-repo/hooks/sync-repo.sh`, 42 unit tests.
+- The renderer and slicing code after the "shared tail" marker is copied in both
+  plugins, because a plugin can't read files outside its own folder.
+  `tests/shared-tail.test.sh` keeps the two copies identical.
+- Mutation checks were run: each core decision (history check, change detection, backup
+  move, replace marker, re-print after compact, empty-render wait, ask gating, mirror
+  deletion, both-or-replace question, canonical-repo guard) was broken on purpose, and at
+  least one test failed each time. One check found dead code (an offline early return in
+  the add-on), and it was removed.
 
 ## Decisions (operator, 2026-10-16)
 
