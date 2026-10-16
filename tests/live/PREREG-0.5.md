@@ -166,3 +166,14 @@ change is covered by unit tests only.
 
 **What gets rerun:** the whole suite, unchanged, as run 3. The scripts changed, so run 2's
 result no longer certifies the build. The ship rule is unchanged.
+
+## Result: run 3, 2026-10-16 (after deviation 2, whole suite)
+
+**34 of 34 PASS.** 0 safety violations. Models served: `claude-sonnet-5-5` and
+`claude-opus-5-5`, read from the transcripts.
+
+**Hand spot-check (B2):** all six hook outputs in the second session are empty, and the
+answer lists all six bundled headings from the native load.
+
+**Decision under the ship rule:** unchanged from run 2. The build goes forward to the
+operator's hands-on test.
